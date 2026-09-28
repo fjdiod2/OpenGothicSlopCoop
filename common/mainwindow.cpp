@@ -1185,6 +1185,8 @@ void MainWindow::onVideo(std::string_view fname) {
   }
 
 void MainWindow::onStartLoading() {
+  if(Gothic::inst().checkLoading()==Gothic::LoadState::Loading)
+    network.invalidate("world_replaced");
   player   .clearInput();
   for(auto& entry:otherPlayers) {
     entry.second->clearInput();
@@ -1232,6 +1234,7 @@ void MainWindow::onWorldLoaded() {
   }
 
 void MainWindow::onSessionExit() {
+  network.invalidate("session_exit");
   rootMenu.setMainMenu();
   }
 

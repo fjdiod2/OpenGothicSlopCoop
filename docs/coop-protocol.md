@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 2 (N04)
+# Co-op wire protocol, version 2 (N05)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -10,12 +10,16 @@ N03 implemented encoding, incremental decoding and a bounded outbound queue.
 N04 adds the nonblocking TCP connection and compatibility handshake in
 [`session.cpp`](../common/network/session.cpp), with background fingerprints in
 [`fingerprint.cpp`](../common/network/fingerprint.cpp). Real engines can now
-connect on macOS loopback. They still simulate independent worlds: N05 binds a
-saved companion, N08 transfers state, and N09 routes input. The codec is shared
-engine source, not a separate mock protocol used only by tests.
+connect on macOS loopback. N05 binds the host's saved companion to that connection.
+The guest still simulates an independent world: N08 transfers state, and N09
+routes input. The codec is shared engine source, not a separate mock protocol
+used only by tests.
 
 Version 2 adds `Accepted` so compatibility acceptance does not prematurely claim
 that a character has been assigned. Version-1 peers are rejected explicitly.
+N05 enables the already-defined `Welcome` message without changing its encoding;
+the wire version remains 2. The exact executable fingerprint prevents an older
+engine implementation from passing the compatibility handshake.
 
 ## Encoding and frame header
 
@@ -70,28 +74,49 @@ player identity is requested by this message.
 
 The body has the same layout as `Hello`, containing the host's fingerprints. The
 guest verifies both before marking the connection accepted. The nonzero header
-generation is host-issued; player, sequence and revision remain zero. N04 allows
-one accepted guest, but creates no NPC and grants no gameplay authority.
+generation is host-issued; player, sequence and revision remain zero. Acceptance
+reserves the single guest slot; the host binds the character in a subsequent step.
 
 The current session implementation accepts only `Hello` on the host and
-`Accepted`/`Reject` on the guest during the handshake. All further application
-messages are disabled in N04; receiving one closes that peer with an observable
-reason. An accepted connection remains open until disconnect/error. There is no
-heartbeat or idle timeout after acceptance yet.
+`Accepted`/`Reject` on the guest during the handshake. After acceptance, the guest
+accepts one `Welcome`. All other application messages close that peer with an
+observable reason. An accepted connection remains open until disconnect/error
+or world replacement. There is no heartbeat or idle timeout after acceptance yet.
 
 ### Welcome
 
-Reserved for actor binding in N05; not sent or accepted by the N04 session.
 No body. The host supplies the generation, assigned persistent player identity
-and current authoritative revision in the header. It is the only message that
+and initial authoritative revision in the header. It is the only message that
 establishes a binding. It does not mean that the guest has loaded a world or may
 already send gameplay input; snapshot transfer/readiness is a later protocol
 extension (N08).
 
 Host ID `1` and companion ID `2` are persistent roster identities, separate from
 socket IDs and connection order. The codec accepts any nonzero player field.
-The session layer must reserve ID 1 for the host and bind the first supported
-guest only to ID 2 (N05). A syntactically valid frame is not proof of authority.
+The session layer reserves ID 1 for the host and binds the single supported
+guest only to ID 2. A syntactically valid frame is not proof of authority.
+
+The host's game-thread integration waits for an idle loader and a host actor,
+then resolves ID 2 in the persistent world roster. Only if absent does it create
+a companion. Resolving an existing actor changes no HP, inventory, position,
+heading or script identity. `HERO` and `PC_HERO` continue to reference host ID 1.
+The transport keeps no NPC pointer or runtime array index. Its host-only
+`bindCompanion(generation)` API takes no requested player ID and refuses a stale
+generation. Repeating it for the live generation succeeds without another frame.
+
+The host sends `Welcome(generation, player=2, sequence=0, revision=1)` after
+`Accepted`. Revision 1 is the initial binding baseline; no replicated state or
+ongoing revision tracking exists yet. The guest requires the accepted generation,
+ID 2 and revision 1. A mismatched or repeated `Welcome` closes it with
+`invalid_binding`; one before `Accepted` fails the handshake. A guest sending
+`Welcome` to the host, or naming host/unknown player IDs after acceptance, is
+disconnected with `authority_violation`. Even input naming ID 2 is disabled and
+closes with `unexpected_message` until the later snapshot/readiness work.
+
+Binding does not create an actor in the guest world, switch its local camera or
+route its input. These require N07–N09. The host reports its binding when the
+Welcome is queued; the guest reports it only after validating the received frame.
+This is assignment metadata, not a guest readiness acknowledgement.
 
 ### Input
 
@@ -125,7 +150,7 @@ discrete interactions and inventory commands require a later extension.
 | --- | --- | --- |
 | 44 | 8 | Highest consecutively applied input sequence, or zero before any input |
 
-Reserved for later gameplay replication; not enabled by the N04 session.
+Reserved for later gameplay replication; not enabled by the N05 session.
 The header revision identifies the authoritative state after applying that
 input. This message carries a revision and acknowledgement only; it contains no
 pose or world state and does not replicate either. N08/N10 will define snapshots
@@ -147,18 +172,20 @@ layer, not by sending an unbound reject in the middle of gameplay.
 
 ## Session and ordering rules for the connection layer
 
-The codec validates structural constraints. N04 enforces the compatibility
-handshake, direction/phase checks and admission limit. Actor authority, input
-sequence tracking and state revisions below remain requirements for later tasks.
+The codec validates structural constraints. The session enforces compatibility,
+direction/phase checks, admission, and companion assignment. Gameplay input,
+sequence tracking and advancing state revisions remain requirements for later tasks.
 
 1. An unbound connection accepts one `Hello`. The host either rejects it or
-   returns one `Accepted`. Both sides verify compatibility; only then may later
-   tasks add a `Welcome` binding and world readiness. Unexpected message types
-   for the direction/phase close the peer. A valid `Input` cannot bypass this.
+   returns one `Accepted`. Both sides verify compatibility; only then may the
+   host issue a `Welcome` binding. World readiness comes later. Unexpected
+   message types for the direction/phase close the peer. A valid `Input` cannot
+   bypass this.
 2. The host issues a fresh nonzero generation for each accepted connection,
    using a random 64-bit seed and increasing counter; counter wrap is refused.
-   Reconnect changes it. N05/N08 must also invalidate it on checkpoint load or
-   world replacement before enabling gameplay input. Generation is a
+   Reconnect changes it. Starting a checkpoint/new-world load or exiting the
+   session closes all peers and discards their binding and queues, retaining
+   the host listener and generation counter. Generation is a
    stale-session fence, not authentication; a player ID is not a credential.
 3. After binding and world readiness, every input must match that connection's
    generation and assigned player. A guest cannot retarget an input to host ID 1
@@ -178,11 +205,16 @@ sequence tracking and state revisions below remain requirements for later tasks.
    cannot keep running. Reconnect requires fresh binding/readiness and resets
    sequence tracking, while preserving the saved companion's identity/state.
 
-N04's generation is a connection epoch; save/load does not yet establish a
-replicated world epoch. Gameplay authority tests remain N05/N09. Passing the
-handshake does not establish campaign correctness.
+N05 tests assignment authority and invalidates connections on world replacement.
+Ordinary saves retain the binding and generation; the binder does not touch a
+world while the asynchronous loader owns it. Disconnect preserves the companion
+in the host world and its next checkpoint, while clearing transport authority.
+Restart loads the version-1 `coop/players` roster, which accepts only IDs 1 and 2;
+no socket binding/generation is stored in a save. Rejoining resolves that actor
+and receives a fresh generation. Synchronizing active input with a checkpoint,
+clearing held network input and resuming a guest from a snapshot remain N08–N14.
 
-## Starting and observing a connection (N04)
+## Starting and observing a connection
 
 Pass exactly one of these explicit startup options:
 
@@ -220,12 +252,15 @@ automatically. Socket errors cannot raise SIGPIPE and terminate the engine.
 
 State transitions and reasons appear in `log.txt` as `Coop: ...`. Development
 `state` replies expose `network`: role, state, reason, bound port, protocol,
-generation, live peer count, acceptance/rejection/timeout/disconnect counters and
-both fingerprints. States include `disabled`, `fingerprinting`, `listening`,
+generation, `bound_player`, `binding_revision`, cumulative `bindings`, live peer
+count, acceptance/rejection/timeout/disconnect counters and both fingerprints.
+`bound_player` and `binding_revision` are zero until binding and after disconnect.
+States include `disabled`, `fingerprinting`, `listening`,
 `connecting`, `handshaking`, `connected`, `rejected`, `failed`, `disconnected`, or
 `fingerprint_error: ...`. Host state remains `connected` when refusing an extra
-guest; the reason/counter reports that separate event. A connection alone does
-not change the local camera, player roster, save file or script `HERO`.
+guest; the reason/counter reports that separate event. `connected` means the
+compatibility handshake passed, even while waiting for binding. A bound guest
+owns companion ID 2 on the host; it still awaits replicated world readiness.
 
 ## Exact compatibility fingerprint inputs
 
@@ -323,17 +358,21 @@ checks an independent `Hello` vector, every split point and byte-at-a-time input
 combined frames, invalid headers/payloads, all truncated prefixes, bounded queues,
 blocked/partial writes, 10,000 ordered input messages under changing read/write
 boundaries and 10,000 deterministic mutated/truncated frames.
-On macOS, five additional test cases exercise endpoint parsing, real loopback
+On macOS, seven additional test cases exercise endpoint parsing, real loopback
 acceptance and reconnect, both directions of fingerprint validation, version
 rejection, second-guest rejection, deadlines, pending-socket limits, and the
-actual file/manifest hash implementation using temporary files.
+actual file/manifest hash implementation using temporary files. Binding tests
+cover host-only assignment, idempotence, reconnect/load invalidation, second-guest
+isolation, incorrect IDs/generations/revisions, early/duplicate Welcome frames,
+and forged guest assignments/inputs. The engine integration test additionally
+checks live and saved NPC reuse, separate inventory/HP/poses and script identity.
 
 ## Build and test without game files
 
 Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
 assets, start a GUI, or require initialized engine submodules. It runs 13 codec
-cases everywhere and five connection/fingerprint cases on macOS; the latter use
+cases everywhere and seven connection/fingerprint cases on macOS; the latter use
 loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh

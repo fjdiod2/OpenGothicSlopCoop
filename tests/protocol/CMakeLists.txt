@@ -36,7 +36,7 @@ foreach(case golden message-types fragments combined malformed-header malformed-
   set_tests_properties(protocol-${case} PROPERTIES TIMEOUT 20)
 endforeach()
 if(APPLE)
-  foreach(case endpoints connection rejections timeout fingerprints)
+  foreach(case endpoints connection rejections timeout fingerprints binding binding-authority)
     add_test(NAME connection-${case} COMMAND coop-connection-tests ${case})
     set_tests_properties(connection-${case} PROPERTIES TIMEOUT 20)
   endforeach()

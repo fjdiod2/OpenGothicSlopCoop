@@ -17,6 +17,7 @@
 #include "world/triggers/cscamera.h"
 #include "game/globaleffects.h"
 #include "game/serialize.h"
+#include "game/playeridentity.h"
 #include "utils/string_frm.h"
 #include "gothic.h"
 #include "focus.h"
@@ -132,7 +133,7 @@ void World::createPlayer(std::string_view cls) {
   std::string_view waypoint = wmatrix->startPoint().name;
   auto             npc      = std::make_unique<Npc>(*this, id, waypoint, NpcProcessPolicy::Player);
   npcPlayer = wobj.insertPlayer(std::move(npc), waypoint);
-  playerRoster[1] = npcPlayer;
+  playerRoster[PlayerIdentity::Host] = npcPlayer;
   game.script()->setInstanceNPC("HERO",*npcPlayer);
   }
 
@@ -140,7 +141,7 @@ void World::insertPlayer(std::unique_ptr<Npc> &&npc, std::string_view waypoint) 
   if(npc==nullptr)
     return;
   npcPlayer = wobj.insertPlayer(std::move(npc),waypoint);
-  playerRoster[1] = npcPlayer;
+  playerRoster[PlayerIdentity::Host] = npcPlayer;
   game.script()->setInstanceNPC("HERO",*npcPlayer);
   }
 
@@ -162,7 +163,7 @@ void World::setPlayer(Npc* npc) {
     npc->setPerceptionDisable(PercType(i));
   
   npcPlayer = npc;
-  playerRoster[1] = npcPlayer;
+  playerRoster[PlayerIdentity::Host] = npcPlayer;
   }
 
 Npc* World::playerById(uint64_t id) const {
@@ -180,7 +181,7 @@ uint64_t World::playerId(const Npc* npc) const {
 Npc* World::addPlayer(uint64_t id) {
   if(auto existing = playerById(id))
     return existing;
-  if(id<2 || playerRoster.size()>=2 || npcPlayer==nullptr)
+  if(id!=PlayerIdentity::Companion || playerRoster.size()>=2 || npcPlayer==nullptr)
     throw std::runtime_error("Only a host and one companion are supported");
   auto cls = script().findSymbolIndex("PC_HERO");
   if(cls==size_t(-1))
@@ -234,7 +235,8 @@ void World::load(Serialize &fin) {
       uint64_t id=0;
       uint32_t index=0;
       fin.read(id,index);
-      if(id==0 || index>=npcCount() || playerRoster.count(id)!=0)
+      if((id!=PlayerIdentity::Host && id!=PlayerIdentity::Companion) ||
+         index>=npcCount() || playerRoster.count(id)!=0)
         throw std::runtime_error("Invalid co-op player identity");
       auto npc = npcById(index);
       if(!npc->isPlayer())
@@ -244,13 +246,13 @@ void World::load(Serialize &fin) {
           throw std::runtime_error("Duplicate co-op character");
       playerRoster.emplace(id,npc);
       }
-    npcPlayer = playerById(1);
+    npcPlayer = playerById(PlayerIdentity::Host);
     if(!npcPlayer)
       throw std::runtime_error("Co-op save is missing the campaign hero");
     script().setInstanceNPC("PC_HERO",*npcPlayer);
     }
   else if(npcPlayer) {
-    playerRoster[1] = npcPlayer;
+    playerRoster[PlayerIdentity::Host] = npcPlayer;
     }
   for(uint32_t i=0; i<npcCount(); ++i) {
     auto npc = npcById(i);

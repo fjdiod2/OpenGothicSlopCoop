@@ -146,6 +146,107 @@ void rejections() {
     }
   }
 
+void binding() {
+  Session host, guest, second;
+  host.start({Role::Host,0},identity(),0);
+  REQUIRE(host.status().state=="listening");
+  const auto port = host.status().port;
+  uint64_t previous = 0;
+  for(uint64_t cycle=1; cycle<=3; ++cycle) {
+    guest.start({Role::Guest,port},identity(),0);
+    pump(host,guest,[&] { return guest.status().state=="connected"; });
+    const auto generation = host.status().generation;
+    REQUIRE(generation!=0 && generation!=previous);
+    REQUIRE(host.status().boundPlayer==0 && guest.status().boundPlayer==0);
+    REQUIRE(!guest.bindCompanion(generation)); // No guest API can assign authority.
+    REQUIRE(!host.bindCompanion(previous));
+    REQUIRE(!host.bindCompanion(generation+1));
+    REQUIRE(host.bindCompanion(generation));
+    REQUIRE(host.bindCompanion(generation)); // Must not enqueue another Welcome.
+    pump(host,guest,[&] { return guest.status().boundPlayer==2; });
+    REQUIRE(host.status().boundPlayer==2 && host.status().bindings==cycle);
+    REQUIRE(guest.status().bindings==1 && guest.status().bindingRevision==1);
+    REQUIRE(guest.status().generation==generation);
+    second.start({Role::Guest,port},identity(),0);
+    pump(host,second,[&] { guest.tick(1); return second.status().state=="rejected"; });
+    REQUIRE(second.status().reason=="host_full");
+    REQUIRE(guest.status().state=="connected" && guest.status().bindings==1);
+    REQUIRE(host.status().boundPlayer==2 && host.status().generation==generation);
+    if(cycle==2) {
+      host.invalidate("world_replaced");
+      REQUIRE(host.status().state=="listening" && host.status().port==port);
+      REQUIRE(host.status().peers==0 && host.status().boundPlayer==0);
+      pump(host,guest,[&] { return guest.status().state=="disconnected"; });
+      REQUIRE(guest.status().boundPlayer==0 && guest.status().bindingRevision==0);
+      REQUIRE(guest.status().generation==0);
+      }
+    else {
+      guest.start({},identity(),1);
+      pump(host,guest,[&] { return host.status().state=="listening"; });
+      }
+    REQUIRE(host.status().boundPlayer==0 && host.status().bindingRevision==0);
+    REQUIRE(host.status().generation==0 && !host.bindCompanion(generation));
+    previous = generation;
+    }
+  }
+
+void sendMessage(Socket& socket, const Message& message) {
+  const auto bytes = encode(message);
+  REQUIRE(::send(socket.fd,bytes.data(),bytes.size(),0)==ssize_t(bytes.size()));
+  }
+
+void bindingAuthority() {
+  Session host, unused;
+  host.start({Role::Host,0},identity(),0);
+  REQUIRE(host.status().state=="listening");
+  // A compatible guest still has no authority to grant itself any identity.
+  for(bool bindFirst: {false,true}) {
+    for(uint64_t player: {1u,2u,3u}) {
+      Socket guest;
+      guest.connect(host.status().port);
+      sendMessage(guest,{0,0,0,0,identity()});
+      pump(host,unused,[&] { return host.status().state=="connected"; });
+      const auto generation = host.status().generation;
+      if(bindFirst) REQUIRE(host.bindCompanion(generation));
+      sendMessage(guest,{generation,player,0,1,Welcome{}});
+      pump(host,unused,[&] { return host.status().state=="listening"; });
+      REQUIRE(host.status().reason=="authority_violation");
+      REQUIRE(host.status().boundPlayer==0);
+      }
+    }
+  // Inputs remain disabled for *every* player, including the assigned companion.
+  for(uint64_t player: {1u,2u,3u}) {
+    Socket guest;
+    guest.connect(host.status().port);
+    sendMessage(guest,{0,0,0,0,identity()});
+    pump(host,unused,[&] { return host.status().state=="connected"; });
+    const auto generation = host.status().generation;
+    REQUIRE(host.bindCompanion(generation));
+    sendMessage(guest,{generation,player,1,0,Input{Forward,0,0}});
+    pump(host,unused,[&] { return host.status().state=="listening"; });
+    REQUIRE(host.status().reason==(player==2 ? "unexpected_message" : "authority_violation"));
+    }
+  // Even a compatible server may not assign host/unknown IDs, change generation,
+  // skip Accepted, or rebind an already bound client.
+  for(int fault=0; fault<6; ++fault) {
+    Socket server;
+    Session guest;
+    guest.start({Role::Guest,server.listen()},identity(),0);
+    guest.tick(1);
+    Socket accepted;
+    ::close(accepted.fd);
+    accepted.fd = ::accept(server.fd,nullptr,nullptr);
+    REQUIRE(accepted.fd>=0);
+    if(fault!=4) sendMessage(accepted,{12,0,0,0,Accepted{identity()}});
+    if(fault==5) sendMessage(accepted,{12,2,0,1,Welcome{}});
+    const uint64_t player = fault==0 ? 1 : fault==1 ? 3 : 2;
+    sendMessage(accepted,{fault==2 ? 13u : 12u,player,0,fault==3 ? 2u : 1u,Welcome{}});
+    pump(host,guest,[&] { return guest.status().state=="failed" || guest.status().state=="disconnected"; });
+    REQUIRE(guest.status().reason==(fault==4 ? "invalid_handshake" : "invalid_binding"));
+    REQUIRE(guest.status().boundPlayer==0 && guest.status().bindingRevision==0);
+    }
+  }
+
 void timeout() {
   Session host, guest;
   host.start({Role::Host,0},identity(),0);
@@ -256,6 +357,8 @@ int main(int argc, char** argv) {
     else if(name=="rejections") rejections();
     else if(name=="timeout") timeout();
     else if(name=="fingerprints") fingerprints();
+    else if(name=="binding") binding();
+    else if(name=="binding-authority") bindingAuthority();
     else throw std::runtime_error("Unknown connection test");
     std::cout << "PASS: " << name << '\n';
     return 0;

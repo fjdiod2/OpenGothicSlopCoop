@@ -1,4 +1,5 @@
 #include "session.h"
+#include "game/playeridentity.h"
 
 #include <algorithm>
 #include <charconv>
@@ -89,6 +90,7 @@ struct Session::Impl {
     WriteQueue output;
     uint64_t started = 0;
     uint64_t generation = 0;
+    bool bound = false;
     explicit Peer(int fd, uint64_t now):socket(fd),started(now) {}
     };
   std::unique_ptr<Socket> listener;
@@ -135,9 +137,26 @@ struct Session::Impl {
     }
 
   bool receiveMessage(Peer& peer, const Message& message, uint64_t now) {
+    if(peer.stage==Peer::Connected && state.role==Role::Guest &&
+       std::holds_alternative<Welcome>(message.payload)) {
+      if(peer.bound || message.generation!=peer.generation ||
+         message.player!=PlayerIdentity::Companion || message.revision!=1) {
+        event("invalid_binding");
+        return false;
+        }
+      peer.bound = true;
+      state.boundPlayer = message.player;
+      state.bindingRevision = message.revision;
+      ++state.bindings;
+      event("bound");
+      return true;
+      }
     if(peer.stage!=Peer::Handshake) {
-      event("unexpected_message");
-      return false; // No gameplay messages are enabled in N04.
+      event(state.role==Role::Host &&
+            (std::holds_alternative<Welcome>(message.payload) ||
+             (message.player!=0 && message.player!=PlayerIdentity::Companion)) ?
+            "authority_violation" : "unexpected_message");
+      return false; // Gameplay input remains disabled until snapshot readiness.
       }
     if(state.role==Role::Host) {
       const auto hello = std::get_if<Hello>(&message.payload);
@@ -267,6 +286,44 @@ Session::Session():impl(std::make_unique<Impl>()) {}
 Session::~Session() = default;
 const NetworkStatus& Session::status() const { return impl->state; }
 
+bool Session::bindCompanion(uint64_t generation) {
+#ifndef _WIN32
+  auto& self = *impl;
+  if(self.state.role!=Role::Host || generation==0) return false;
+  for(auto& peer:self.peers) {
+    if(peer->stage!=Impl::Peer::Connected || peer->generation!=generation) continue;
+    if(peer->bound) return true;
+    if(!peer->output.enqueue({generation,PlayerIdentity::Companion,0,1,Welcome{}}))
+      return false;
+    peer->bound = true;
+    self.state.boundPlayer = PlayerIdentity::Companion;
+    self.state.bindingRevision = 1;
+    ++self.state.bindings;
+    self.event("bound");
+    return true;
+    }
+#else
+  (void)generation;
+#endif
+  return false;
+  }
+
+void Session::invalidate(const std::string& reason) {
+#ifndef _WIN32
+  auto& self = *impl;
+  if(self.state.role==Role::Disabled) return;
+  for(const auto& peer:self.peers)
+    if(peer->stage==Impl::Peer::Connected) ++self.state.disconnected;
+  self.peers.clear();
+  self.state.peers = 0;
+  self.state.generation = self.state.boundPlayer = self.state.bindingRevision = 0;
+  self.state.state = self.listener ? "listening" : "disconnected";
+  self.event(reason);
+#else
+  (void)reason;
+#endif
+  }
+
 void Session::start(Endpoint endpoint, const Hello& identity, uint64_t now) {
   impl = std::make_unique<Impl>();
   auto& self = *impl;
@@ -331,7 +388,10 @@ void Session::tick(uint64_t now) {
       const bool wasConnected = peer.stage==Impl::Peer::Connected;
       if(self.pump(peer,now)) { ++i; continue; }
       const bool connected = wasConnected || peer.stage==Impl::Peer::Connected;
-      if(connected) ++self.state.disconnected;
+      if(connected) {
+        ++self.state.disconnected;
+        self.state.boundPlayer = self.state.bindingRevision = 0;
+        }
       self.peers.erase(self.peers.begin()+std::ptrdiff_t(i));
       if(self.state.role==Role::Guest && self.state.state!="rejected")
         self.state.state = connected ? "disconnected" : "failed";
@@ -348,6 +408,7 @@ void Session::tick(uint64_t now) {
     self.listener.reset();
     self.state.state = "failed";
     self.state.peers = 0;
+    self.state.generation = self.state.boundPlayer = self.state.bindingRevision = 0;
     self.event(std::string("network_error: ")+error.what());
     }
 #else

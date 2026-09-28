@@ -79,6 +79,9 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("port"); out.Uint(net.port);
   out.Key("protocol"); out.Uint(Coop::ProtocolVersion);
   out.Key("generation"); out.Uint64(net.generation);
+  out.Key("bound_player"); out.Uint64(net.boundPlayer);
+  out.Key("binding_revision"); out.Uint64(net.bindingRevision);
+  out.Key("bindings"); out.Uint64(net.bindings);
   out.Key("peers"); out.Uint64(net.peers);
   out.Key("accepted"); out.Uint64(net.accepted);
   out.Key("rejected"); out.Uint64(net.rejected);
@@ -90,6 +93,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   if(world) {
     out.Key("world"); str(world->name());
     out.Key("tick"); out.Uint64(world->tickCount());
+    out.Key("npc_count"); out.Uint(world->npcCount());
     }
   if(npc) {
     auto vec = [&](const Vec3& v) {
@@ -137,6 +141,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       auto pos = actor->position();
       out.StartObject();
       out.Key("id"); out.Uint64(entry.first);
+      out.Key("npc_index"); out.Uint(world->npcId(actor)); // Diagnostic only; not a persistent ID.
       out.Key("position"); out.StartArray();
       out.Double(pos.x); out.Double(pos.y); out.Double(pos.z); out.EndArray();
       out.Key("rotation"); out.Double(actor->rotation());
@@ -377,6 +382,9 @@ void MainWindow::pollTestControl() {
       device.readPixels(textureCast<const Texture2d&>(tex)).save(output.string().c_str());
       replyTestControl(testRequestId, {}, output.string());
       return;
+      }
+    else if(action=="load") {
+      loadGame("save_slot_99.sav");
       }
     else if(action=="save") {
       if(dialogs.isActive() || game.world()->currentCs()!=nullptr)

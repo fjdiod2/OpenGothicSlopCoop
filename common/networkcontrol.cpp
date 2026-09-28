@@ -2,6 +2,8 @@
 #include "commandline.h"
 #include "gothic.h"
 #include "network/fingerprint.h"
+#include "game/playeridentity.h"
+#include "world/world.h"
 
 #include <Tempest/Application>
 #include <Tempest/Log>
@@ -45,6 +47,23 @@ void MainWindow::tickNetwork() {
     }
   network.tick(Tempest::Application::tickCount());
   const auto& status = network.status();
+  // The loader temporarily owns the entire game during saves as well as loads.
+  // Resolve by persistent ID on the game thread; Session never retains NPC pointers.
+  if(status.role==Coop::Role::Host && status.state=="connected" && status.boundPlayer==0 &&
+     Gothic::inst().checkLoading()==Gothic::LoadState::Idle) {
+    if(auto world = Gothic::inst().world(); world && world->playerById(PlayerIdentity::Host)) {
+      try {
+        world->addPlayer(PlayerIdentity::Companion); // Reuses a live or restored actor unchanged.
+        controlForPlayer(PlayerIdentity::Companion);
+        if(!network.bindCompanion(status.generation))
+          throw std::runtime_error("Cannot queue companion binding");
+        }
+      catch(const std::exception& error) {
+        Tempest::Log::e("Coop binding: ",error.what());
+        network.invalidate("binding_failed");
+        }
+      }
+    }
   if(networkEvent!=status.events) {
     networkEvent = status.events;
     Tempest::Log::i("Coop: ",status.state," port=",status.port," reason=",status.reason);
