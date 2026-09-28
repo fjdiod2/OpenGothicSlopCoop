@@ -240,9 +240,10 @@ The full disconnect/save acceptance scenario remains N11–N13.
 | --- | --- | --- |
 | 44 | 8 | Highest consecutively applied input sequence, or zero before any input |
 
-N10 queues this after the host's simulation/controller step, immediately before
+N13 installs input only inside an actual host simulation/controller step; paused
+frames keep received input queued. It queues this acknowledgement immediately before
 the corresponding `Poses` frame at the same revision. Acknowledged inputs have
-been installed in companion control; future movement while a button remains
+been processed by companion control; future movement while a button remains
 held still belongs to future host ticks. The pose frame repeats the highest
 applied sequence. The guest rejects acknowledgements for another generation/player,
 sequences it never sent, or decreasing sequence/revision. This acknowledges no
@@ -377,7 +378,8 @@ Ordinary saves retain the binding and generation; the binder does not touch a
 world while the asynchronous loader owns it. Disconnect preserves the companion
 in the host world and its next checkpoint, while clearing transport authority.
 Restart loads the version-1 `coop/players` roster, which accepts only IDs 1 and 2;
-no socket binding/generation is stored in a save. Rejoining resolves that actor
+no live socket binding is restored from a save. N13's historical generation is
+provenance only. Rejoining resolves that actor
 and receives a fresh generation.
 
 N11 grants movement control only while the current generation has companion ID 2
@@ -431,7 +433,57 @@ old pose disconnects before either actor changes. The same guest process then
 uses ordinary R input to rejoin again and resume movement. Asset-free
 `rejoin-queues` / `rejoin-stale` cover undrained host input/guest poses, unsent
 bytes, a changed snapshot and obsolete acknowledgements across connection reuse.
-Coordinated save/load boundaries remain N13–N14. Wire/checkpoint versions stay 4/56.
+Coordinated loading remains N14. Wire/checkpoint versions stay 4/56.
+
+### Checkpoint input boundary (N13)
+
+Only the host requests a disk checkpoint. The request becomes pending, then is
+captured after the next eligible controller step and its pose/input acknowledgement.
+If simulation is paused, unprocessed input stays queued and lies outside the cut.
+The cut includes the last input sequence processed by that controller step, not
+all bytes received by TCP. While the worker owns the world, the host continues
+receiving into the existing bounded FIFO, but cannot drain or acknowledge later
+input. Success or failure releases that FIFO in order on the next simulation step.
+Duplicates still consume no input sequence/effect; overflow still disconnects.
+Losing a connection during the write discards its queue as usual.
+
+The same world returns from a save; its held controls/camera are retained rather
+than rebuilt. This lets held movement resume without a second keydown. A held
+button's future movement is outside the checkpoint; loading clears transient
+controls. Snapshot transfer and world replacement use their separate barriers.
+
+Disk archives add optional `coop/checkpoint`, schema 1, exactly 44 bytes. The
+existing checkpoint encoding uses little-endian integers on supported macOS:
+
+| Offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 4 | Schema version, 1 |
+| 4 | 8 | World object namespace |
+| 12 | 8 | Authoritative world tick at capture |
+| 20 | 8 | Connection generation, or 0 while offline |
+| 28 | 8 | Included pose revision, or 0 while offline |
+| 36 | 8 | Last input included in that generation, or 0 while offline |
+
+The world namespace/tick identifies the authoritative capture boundary; the pose
+revision is scoped to the recorded live generation. Offline captures have no
+active transport revision/sequence, but still contain all already-applied world
+effects. Legacy archives without this optional entry load normally. Present
+records must have the exact layout/schema and agree with the loaded world/tick;
+an offline record cannot claim input or a pose revision. The loaded record grants
+no authority and never seeds new input sequence counters. Memory snapshots omit
+disk-checkpoint provenance and describe their own fresh connection instead.
+
+The writer finalizes and flushes the temporary archive, fsyncs it and replaces the
+prior checkpoint before the host reports `save_status = committed`. Failure reports
+`failed`, preserves the prior checkpoint and returns the same live world. Ordinary
+`StateAck`/`PoseAck` remain simulation/presentation acknowledgements; they do not
+announce disk success, and no new wire message is introduced. Test observations
+expose `save_boundary`, `loaded_checkpoint` and `network.input_held`.
+
+`save-boundary` uses a bounded test-only writer delay (0–2,000 ms) to inject later
+look input and a duplicate during I/O. It independently decodes the archive cut,
+checks exactly one calibrated turn after success/failure, verifies unchanged prior
+bytes on failure, resumes held movement and reloads connected/offline checkpoints.
 
 ## Starting and observing a connection
 
@@ -607,7 +659,7 @@ Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
 assets, start a GUI, or require initialized engine submodules. It runs 13 codec
 cases plus four object-registry and two interpolation cases everywhere, and
-sixteen connection/fingerprint cases on macOS (35 total); the latter use
+seventeen connection/fingerprint cases on macOS (36 total); the latter use
 loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh

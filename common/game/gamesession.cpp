@@ -151,6 +151,17 @@ GameSession::GameSession(Serialize &fin, Authority authority) : authority(author
     wrld->load(fin);
     }
 
+  if(fin.setEntry("coop/checkpoint")) {
+    uint32_t version = 0;
+    CheckpointBoundary boundary;
+    fin.read(version,boundary.world,boundary.tick,boundary.generation,boundary.revision,boundary.input);
+    if(version!=1 || fin.remainingBytes()!=0 || boundary.world!=wrld->objectRegistry().worldNamespace() ||
+       boundary.tick!=ticks || (boundary.generation==0 && (boundary.revision!=0 || boundary.input!=0)) ||
+       (boundary.generation!=0 && boundary.revision==0))
+      throw std::runtime_error("Invalid checkpoint boundary");
+    loadedCheckpoint = boundary;
+    }
+
   Gothic::inst().setLoadingProgress(70);
 
   if(fin.setEntry("game/perc"))
@@ -174,7 +185,7 @@ GameSession::GameSession(Serialize &fin, Authority authority) : authority(author
 GameSession::~GameSession() {
   }
 
-void GameSession::save(Serialize &fout, std::string_view name, const Pixmap& screen) {
+void GameSession::save(Serialize &fout, std::string_view name, const Pixmap& screen, const CheckpointBoundary* boundary) {
   if(!isAuthoritative())
     throw std::runtime_error("Only the host can save the campaign");
   SaveGameHeader hdr;
@@ -204,6 +215,13 @@ void GameSession::save(Serialize &fout, std::string_view name, const Pixmap& scr
 
   fout.setEntry("game/session");
   fout.write(ticks,wrldTime,wrldTimePart,wrld->name());
+
+  if(boundary) {
+    if(boundary->world!=wrld->objectRegistry().worldNamespace() || boundary->tick!=ticks)
+      throw std::runtime_error("Checkpoint boundary does not describe this world");
+    fout.setEntry("coop/checkpoint");
+    fout.write(uint32_t(1),boundary->world,boundary->tick,boundary->generation,boundary->revision,boundary->input);
+    }
 
   fout.setEntry("game/camera");
   cam->save(fout);

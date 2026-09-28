@@ -528,9 +528,13 @@ bool Session::sendInput(Input input) {
   return false;
   }
 
+void Session::holdInput(bool hold) {
+  if(impl->state.role==Role::Host) impl->state.inputHeld = hold;
+  }
+
 std::optional<Message> Session::takeInput() {
 #ifndef _WIN32
-  if(impl->state.role!=Role::Host) return {};
+  if(impl->state.role!=Role::Host || impl->state.inputHeld) return {};
   for(auto& peer:impl->peers) {
     if(peer->inputs.empty()) continue;
     auto message = std::move(peer->inputs.front());
@@ -543,7 +547,7 @@ std::optional<Message> Session::takeInput() {
 
 bool Session::inputApplied(uint64_t generation, uint64_t sequence, uint64_t revision) {
 #ifndef _WIN32
-  if(impl->state.role!=Role::Host) return false;
+  if(impl->state.role!=Role::Host || impl->state.inputHeld) return false;
   for(auto& peer:impl->peers) {
     if(peer->generation!=generation || peer->transfer!=Impl::Peer::Ready ||
        sequence!=peer->appliedInput+1 || sequence>peer->receivedInput) continue;

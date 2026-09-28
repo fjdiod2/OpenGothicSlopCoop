@@ -429,6 +429,43 @@ void inputDisconnect() {
   REQUIRE(state.port!=0); // The host listener survives the lost controller.
   }
 
+void saveInputHold() {
+  Session host, guest;
+  host.start({Role::Host,0},identity(),0);
+  guest.start({Role::Guest,host.status().port},identity(),0);
+  pump(host,guest,[&] { return host.status().state=="connected"; });
+  const auto generation = host.status().generation;
+  REQUIRE(host.bindCompanion(generation) && host.sendSnapshot(generation,1,Bytes{1}));
+  pump(host,guest,[&] { return guest.status().snapshotState=="received"; });
+  REQUIRE(guest.takeSnapshot() && guest.snapshotLoaded(generation,1));
+  pump(host,guest,[&] { return host.status().snapshotState=="ready"; });
+  REQUIRE(guest.sendInput({Forward,0,0}));
+  pump(host,guest,[&] { return host.status().inputReceived==1; });
+  REQUIRE(host.takeInput() && host.inputApplied(generation,1,2));
+  host.holdInput(true);
+  REQUIRE(guest.sendInput({Forward,50,0}) && guest.sendInput({0,0,0}));
+  pump(host,guest,[&] { return host.status().inputReceived==3; });
+  REQUIRE(host.status().inputHeld && host.status().inputApplied==1);
+  REQUIRE(!host.takeInput() && !host.inputApplied(generation,2,3));
+  // Both successful and failed writers release the same FIFO after completion.
+  host.holdInput(false);
+  for(uint64_t sequence=2; sequence<=3; ++sequence) {
+    const auto input = host.takeInput();
+    REQUIRE(input && input->sequence==sequence && input->generation==generation);
+    REQUIRE(host.inputApplied(generation,sequence,3));
+    REQUIRE(!host.inputApplied(generation,sequence,3));
+    }
+  REQUIRE(!host.takeInput());
+  pump(host,guest,[&] { return guest.status().inputAcknowledged==3; });
+  host.holdInput(true);
+  REQUIRE(guest.sendInput({Forward,100,0}));
+  pump(host,guest,[&] { return host.status().inputReceived==4; });
+  guest.start({},identity(),1);
+  pump(host,guest,[&] { return host.status().state=="listening"; });
+  host.holdInput(false);
+  REQUIRE(!host.takeInput() && host.status().inputApplied==0 && host.status().generation==0);
+  }
+
 void inputValidation() {
   Session host, idle;
   host.start({Role::Host,0},identity(),0);
@@ -551,6 +588,8 @@ void rejoinQueues() {
   REQUIRE(host.sendPoses(old,2,posesFixture()));
   pump(host,guest,[&] { return guest.status().posesReceived==2; });
   REQUIRE(guest.sendInput({TurnRight,100,0})); // Also leave unsent guest bytes.
+  guest.start({},identity(),2);
+  pump(host,guest,[&] { return host.status().state=="listening"; },3);
   guest.start({Role::Guest,host.status().port},identity(),2);
   pump(host,guest,[&] { return host.status().accepted==2 && guest.status().state=="connected"; },3);
   const auto generation = host.status().generation;
@@ -749,6 +788,7 @@ int main(int argc, char** argv) {
     else if(name=="input-roundtrip") inputRoundtrip();
     else if(name=="input-validation") inputValidation();
     else if(name=="input-disconnect") inputDisconnect();
+    else if(name=="save-input-hold") saveInputHold();
     else if(name=="poses-roundtrip") posesRoundtrip();
     else if(name=="poses-validation") posesValidation();
     else if(name=="rejoin-queues") rejoinQueues();

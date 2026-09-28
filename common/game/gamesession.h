@@ -7,6 +7,8 @@
 #include "game/gamescript.h"
 #include "camera.h"
 #include "gametime.h"
+#include "checkpoint.h"
+#include <optional>
 
 class World;
 class WorldView;
@@ -29,7 +31,9 @@ class GameSession final {
     GameSession(Serialize& fin, Authority authority = Authority::Campaign);
     ~GameSession();
 
-    void         save(Serialize& fout, std::string_view name, const Tempest::Pixmap &screen);
+    void         save(Serialize& fout, std::string_view name, const Tempest::Pixmap &screen,
+                      const CheckpointBoundary* boundary = nullptr);
+    const std::optional<CheckpointBoundary>& checkpointBoundary() const { return loadedCheckpoint; }
     void         setupSettings();
 
     void         setWorld(std::unique_ptr<World> &&w);
@@ -96,6 +100,7 @@ class GameSession final {
     auto         findStorage(std::string_view name) -> const WorldStateStorage&;
 
     const Authority               authority = Authority::Campaign;
+    std::optional<CheckpointBoundary> loadedCheckpoint;
     uint64_t                      presentationTicks = 0;
     Tempest::SoundDevice           sound;
 

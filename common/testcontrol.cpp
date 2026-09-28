@@ -71,6 +71,18 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("rendered_frames"); out.Uint64(renderedFrames);
   out.Key("simulation_held"); out.Bool(runtimeMode==R_Suspended);
   out.Key("save_status"); str(saveStatus);
+  const auto boundary = [&](const std::optional<CheckpointBoundary>& value) {
+    if(!value) { out.Null(); return; }
+    out.StartObject();
+    out.Key("world"); out.Uint64(value->world);
+    out.Key("tick"); out.Uint64(value->tick);
+    out.Key("generation"); out.Uint64(value->generation);
+    out.Key("revision"); out.Uint64(value->revision);
+    out.Key("input"); out.Uint64(value->input);
+    out.EndObject();
+    };
+  out.Key("save_boundary"); boundary(saveBoundary);
+  out.Key("loaded_checkpoint"); boundary(idle && game.gameSession() ? game.gameSession()->checkpointBoundary() : std::nullopt);
   out.Key("load_status"); str(loadStatus);
   out.Key("dialog"); out.Bool(dialogs.isActive());
   out.Key("video"); out.Bool(video.isActive());
@@ -99,6 +111,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("input_sent"); out.Uint64(net.inputSent);
   out.Key("input_received"); out.Uint64(net.inputReceived);
   out.Key("input_applied"); out.Uint64(net.inputApplied);
+  out.Key("input_held"); out.Bool(net.inputHeld);
   out.Key("input_acknowledged"); out.Uint64(net.inputAcknowledged);
   out.Key("input_duplicates"); out.Uint64(net.inputDuplicates);
   out.Key("input_stale"); out.Uint64(net.inputStale);
@@ -537,8 +550,14 @@ void MainWindow::pollTestControl() {
     else if(action=="save") {
       if(dialogs.isActive() || game.world()->currentCs()!=nullptr)
         throw std::runtime_error("Cannot save during dialogue or a cutscene");
+      testSaveDelayMs = 0;
+      if(cmd.HasMember("delay_ms")) {
+        if(!cmd["delay_ms"].IsUint() || cmd["delay_ms"].GetUint()>2000)
+          throw std::runtime_error("Expected save delay in 0..2000 ms");
+        testSaveDelayMs = cmd["delay_ms"].GetUint();
+        }
       saveGame("save_slot_99.sav", "Automation test checkpoint");
-      // This starts the async save; the caller must wait for idle and verify disk.
+      // Queues a save after this controller step; require committed completion.
       }
     else
       throw std::runtime_error("Unknown test action");

@@ -927,11 +927,13 @@ uint64_t MainWindow::tick() {
 
   auto st = Gothic::inst().checkLoading();
   if(st==Gothic::LoadState::Finalize || st==Gothic::LoadState::FailedLoad || st==Gothic::LoadState::FailedSave) {
-    if(saveStatus=="pending")
+    const bool wasSaving = returningFromSave;
+    if(wasSaving && saveStatus=="pending")
       saveStatus = st==Gothic::LoadState::Finalize ? "committed" : "failed";
     if(loadStatus=="pending")
       loadStatus = st==Gothic::LoadState::Finalize ? "loaded" : "failed";
     Gothic::inst().finishLoading();
+    if(wasSaving) network.holdInput(false);
     finishNetworkLoad(st==Gothic::LoadState::Finalize);
     if(st==Gothic::LoadState::FailedLoad)
       rootMenu.setMainMenu();
@@ -976,6 +978,7 @@ uint64_t MainWindow::tick() {
     return dt;
     }
 
+  tickNetworkInput(true); // Install input only when this frame will process controllers.
   dialogs.tick(dt);
   inventory.tick(dt);
   Gothic::inst().tick(dt);
@@ -1135,6 +1138,7 @@ void MainWindow::loadGame(std::string_view slot) {
   }
 
 void MainWindow::saveGame(std::string_view slot, std::string_view name) {
+  if(queuedSave || Gothic::inst().checkLoading()!=Gothic::LoadState::Idle) return;
   if(Gothic::inst().isNetworkPaused()) { saveStatus = "denied_snapshot"; return; }
   if(Gothic::inst().isGuest()) {
     saveStatus = "denied_guest";
@@ -1144,6 +1148,34 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
     return;
   if(auto w = Gothic::inst().world(); w!=nullptr && w->currentCs()!=nullptr)
     return;
+
+  if(!Gothic::inst().world()) return;
+  queuedSave = SaveRequest{std::string(slot),std::string(name),testSaveDelayMs};
+  testSaveDelayMs = 0;
+  saveStatus = "pending";
+  saveBoundary.reset();
+  }
+
+void MainWindow::beginQueuedSave() try {
+  auto& game = Gothic::inst();
+  if(!queuedSave || game.checkLoading()!=Gothic::LoadState::Idle || game.isNetworkPaused()) return;
+  auto request = std::move(*queuedSave);
+  queuedSave.reset();
+  if(!game.world() || dialogs.isActive() || game.world()->currentCs()!=nullptr) {
+    saveStatus = "failed";
+    return;
+    }
+  const auto& net = network.status();
+  CheckpointBoundary boundary;
+  boundary.world = game.world()->objectRegistry().worldNamespace();
+  boundary.tick = game.world()->tickCount();
+  if(net.role==Coop::Role::Host && net.snapshotState=="ready") {
+    boundary.generation = net.generation;
+    boundary.revision = net.posesSent;
+    boundary.input = net.inputApplied;
+    }
+  saveBoundary = boundary;
+  network.holdInput(true);
 
   auto tex  = renderer.screenshoot(cmdId);
   auto lres = Attachment();
@@ -1174,11 +1206,13 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   auto  pm    = device.readPixels(textureCast<const Texture2d&>(thumb));
 
   saveStatus = "pending";
-  Gothic::inst().startSave(std::move(textureCast<Texture2d&>(tex)),[slot=std::string(slot),name=std::string(name),pm](std::unique_ptr<GameSession>&& game){
+  Gothic::inst().startSave(std::move(textureCast<Texture2d&>(tex)),[request=std::move(request),pm,boundary](std::unique_ptr<GameSession>&& game){
     if(!game)
       return std::move(game);
 
     // Keep the last checkpoint until a complete archive has reached disk.
+    if(request.delayMs) std::this_thread::sleep_for(std::chrono::milliseconds(request.delayMs));
+    const auto& slot = request.slot;
     const auto temporary = slot+".pending";
     bool created = false;
     try {
@@ -1186,7 +1220,7 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
       Tempest::WFile f(temporary);
       created = true;
       Serialize s(f);
-      game->save(s,name,pm);
+      game->save(s,request.name,pm,&boundary);
       s.finish();
       if(!f.flush())
         throw std::runtime_error("Unable to flush checkpoint");
@@ -1224,6 +1258,12 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   update();
   }
 
+catch(...) {
+  network.holdInput(false);
+  saveStatus = "failed";
+  throw;
+  }
+
 void MainWindow::onVideo(std::string_view fname) {
   if(Gothic::inst().isBenchmarkMode())
     return;
@@ -1231,6 +1271,9 @@ void MainWindow::onVideo(std::string_view fname) {
   }
 
 void MainWindow::onStartLoading() {
+  returningFromSave = Gothic::inst().checkLoading()==Gothic::LoadState::Saving;
+  if(returningFromSave) return; // Same world returns; retain its held controllers.
+  if(queuedSave) { queuedSave.reset(); saveStatus = "failed"; }
   if(Gothic::inst().checkLoading()==Gothic::LoadState::Loading && !networkLoading)
     network.invalidate("world_replaced");
   player   .clearInput();
@@ -1243,6 +1286,10 @@ void MainWindow::onStartLoading() {
   }
 
 void MainWindow::onWorldLoaded() {
+  if(returningFromSave) {
+    returningFromSave = false;
+    return; // Saving did not replace camera, world pointers or controller state.
+    }
   dMouse = Point();
   rebuildPlayerControls();
 
@@ -1437,6 +1484,7 @@ void MainWindow::render(){
       */
     const uint64_t dt = tick();
     updateNetworkPoses();
+    beginQueuedSave(); // Capture only after this step's input and pose acknowledgement.
     updateAnimation(dt);
     tickCamera(dt);
 

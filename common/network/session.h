@@ -32,6 +32,7 @@ struct NetworkStatus {
   uint64_t inputSent = 0, inputReceived = 0, inputApplied = 0, inputAcknowledged = 0;
   uint64_t inputDuplicates = 0, inputStale = 0, acknowledgedRevision = 0;
   uint64_t posesSent = 0, posesReceived = 0, posesApplied = 0, posesAcknowledged = 0, poseTick = 0;
+  bool inputHeld = false;
   };
 
 struct Snapshot {
@@ -59,6 +60,7 @@ class Session final {
     bool snapshotLoaded(uint64_t generation, uint64_t revision);
     bool sendInput(Input input);
     std::optional<Message> takeInput();
+    void holdInput(bool hold);
     bool inputApplied(uint64_t generation, uint64_t sequence, uint64_t revision);
     bool sendPoses(uint64_t generation, uint64_t revision, const Poses& poses);
     std::optional<Message> takePoses();

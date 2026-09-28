@@ -1,4 +1,5 @@
 #pragma once
+#include "game/checkpoint.h"
 
 #include "camera.h"
 #include "resources.h"
@@ -119,7 +120,7 @@ class MainWindow : public Tempest::Window {
     void finishNetworkLoad(bool success);
     void networkKey(Tempest::KeyEvent& event, bool down);
     void sendNetworkInput(int x=0, int y=0);
-    void tickNetworkInput();
+    void tickNetworkInput(bool apply = false);
     void updateNetworkPoses();
     std::set<Tempest::Event::KeyType> networkKeys;
     uint32_t networkButtons = 0, remoteButtons = 0;
@@ -135,6 +136,12 @@ class MainWindow : public Tempest::Window {
     std::string testControlDir;
     std::string testSessionId;
     std::string saveStatus = "none";
+    struct SaveRequest { std::string slot, name; uint32_t delayMs = 0; };
+    std::optional<SaveRequest> queuedSave;
+    std::optional<CheckpointBoundary> saveBoundary;
+    bool returningFromSave = false;
+    uint32_t testSaveDelayMs = 0;
+    void beginQueuedSave();
     std::string loadStatus = "none";
     struct HudObservation {
       uint64_t player = 0;

@@ -204,7 +204,7 @@ void MainWindow::sendNetworkInput(int x, int y) {
     network.invalidate("input_queue_full");
   }
 
-void MainWindow::tickNetworkInput() {
+void MainWindow::tickNetworkInput(bool apply) {
   auto& game = Gothic::inst();
   const auto& status = network.status();
   if(game.checkLoading()!=Gothic::LoadState::Idle) return;
@@ -223,7 +223,7 @@ void MainWindow::tickNetworkInput() {
       controlForPlayer(PlayerIdentity::Companion).clearInput();
     networkControlGeneration = controlGeneration;
     }
-  if(status.role!=Coop::Role::Host || status.snapshotState!="ready" || !game.world()) return;
+  if(!apply || status.role!=Coop::Role::Host || status.snapshotState!="ready" || !game.world()) return;
   auto& control = controlForPlayer(PlayerIdentity::Companion);
   float lookX = 0, lookY = 0;
   while(auto message = network.takeInput()) {
