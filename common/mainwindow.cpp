@@ -1427,6 +1427,7 @@ void MainWindow::render(){
       lastly - camera position
       */
     const uint64_t dt = tick();
+    updateNetworkPoses();
     updateAnimation(dt);
     tickCamera(dt);
 

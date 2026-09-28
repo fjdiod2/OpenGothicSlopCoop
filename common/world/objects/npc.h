@@ -91,6 +91,9 @@ class Npc final {
     void       setDirection(float rotation);
     void       setDirectionY(float rotation);
     void       setRunAngle  (float angle);
+    Coop::ActorPose networkPose() const;
+    bool       validateNetworkPose(const Coop::ActorPose& pose) const;
+    void       applyNetworkPose(const Coop::ActorPose& pose);
 
     auto       transform()  const -> Tempest::Matrix4x4;
     auto       position()   const -> Tempest::Vec3;

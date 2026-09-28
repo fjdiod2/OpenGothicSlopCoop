@@ -6,6 +6,7 @@
 #include "game/constants.h"
 #include "meshobjects.h"
 #include "effect.h"
+#include "network/protocol.h"
 
 class Serialize;
 class ObjVisual;
@@ -74,6 +75,8 @@ class MdlVisual final {
     bool                           isUsingTorch() const;
 
     const Pose&                    pose() const { return *skInst; }
+    bool validateNetworkLayers(const std::vector<Coop::AnimationLayer>& layers) const;
+    void applyNetworkLayers(const std::vector<Coop::AnimationLayer>& layers);
     bool                           updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force);
     void                           processLayers  (World& world);
     bool                           processEvents(World& world, uint64_t &barrier, Animation::EvCount &ev);
@@ -174,4 +177,3 @@ class MdlVisual final {
     AnimationSolver                solver;
     std::unique_ptr<Pose>          skInst;
   };
-

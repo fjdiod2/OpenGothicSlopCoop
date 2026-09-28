@@ -19,6 +19,14 @@ MdlVisual::MdlVisual()
 MdlVisual::~MdlVisual() {
   }
 
+bool MdlVisual::validateNetworkLayers(const std::vector<Coop::AnimationLayer>& layers) const {
+  return skInst->validateNetworkLayers(layers,solver);
+  }
+
+void MdlVisual::applyNetworkLayers(const std::vector<Coop::AnimationLayer>& layers) {
+  skInst->applyNetworkLayers(layers,solver);
+  }
+
 void MdlVisual::save(Serialize &fout, const Npc&) const {
   fout.write(fgtMode);
   if(skeleton!=nullptr)

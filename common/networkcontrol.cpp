@@ -4,6 +4,7 @@
 #include "network/fingerprint.h"
 #include "game/playeridentity.h"
 #include "world/world.h"
+#include "world/objects/npc.h"
 #include "game/gamesession.h"
 #include "game/serialize.h"
 #include "utils/mouseutil.h"
@@ -188,6 +189,8 @@ void MainWindow::tickNetworkInput() {
   if(networkControlGeneration!=status.generation) {
     networkKeys.clear();
     networkButtons = remoteButtons = 0;
+    networkInstalledInput = 0;
+    networkInterpolation.reset();
     if(status.role==Coop::Role::Host && game.world() && game.world()->playerById(PlayerIdentity::Companion))
       controlForPlayer(PlayerIdentity::Companion).clearInput();
     networkControlGeneration = status.generation;
@@ -212,14 +215,67 @@ void MainWindow::tickNetworkInput() {
     if(game.settingsGetI("GAME","camLookaroundInverse")) y = -y;
     lookX += x;
     lookY += y;
-    if(!network.inputApplied(message->generation,message->sequence,status.snapshotRevision)) {
-      control.clearInput();
-      remoteButtons = 0;
-      network.invalidate("input_ack_failed");
-      return;
-      }
+    networkInstalledInput = message->sequence;
     }
   // Bound the accumulated impulse per frame, including a burst of packets.
   // The sender never supplies elapsed simulation time.
   control.onRotateMouse(std::clamp(lookX,-36.f,36.f),std::clamp(lookY,-36.f,36.f));
+  }
+
+void MainWindow::updateNetworkPoses() {
+  auto& game = Gothic::inst();
+  const auto& status = network.status();
+  auto world = game.world();
+  if(game.checkLoading()!=Gothic::LoadState::Idle || !world || status.snapshotState!="ready") return;
+  try {
+    if(status.role==Coop::Role::Host) {
+      if(status.posesSent!=0 && status.poseTick==world->tickCount() && status.inputApplied==networkInstalledInput) return;
+      const auto revision = std::max(status.snapshotRevision,status.posesSent)+1;
+      if(revision==0) throw std::runtime_error("Pose revision exhausted");
+      while(status.inputApplied<networkInstalledInput)
+        if(!network.inputApplied(status.generation,status.inputApplied+1,revision))
+          throw std::runtime_error("Cannot acknowledge applied input");
+      Coop::Poses poses;
+      poses.world = world->objectRegistry().worldNamespace();
+      poses.tick = world->tickCount();
+      poses.appliedInput = status.inputApplied;
+      for(size_t i=0; i<poses.actors.size(); ++i)
+        poses.actors[i] = world->playerById(i+1)->networkPose();
+      if(!network.sendPoses(status.generation,revision,poses))
+        throw std::runtime_error("Cannot queue authoritative poses");
+      return;
+      }
+    // Advance the existing blend before retargeting it. Otherwise a steady
+    // stream would restart at alpha zero every frame and never move.
+    if(!networkInterpolation.empty()) {
+      const auto frame = networkInterpolation.sample(Tempest::Application::tickCount());
+      const auto& poses = std::get<Coop::Poses>(frame.payload);
+      for(size_t i=0; i<2; ++i) world->playerById(i+1)->applyNetworkPose(poses.actors[i]);
+      // An acknowledgement means both rendered transforms reached that exact
+      // authoritative sample, not merely that its packet arrived.
+      if(networkInterpolation.alpha()==1.f && frame.revision>status.posesApplied &&
+         !network.posesApplied(frame.generation,frame.revision))
+        throw std::runtime_error("Cannot acknowledge interpolated poses");
+      }
+    while(auto message = network.takePoses()) {
+      const auto& poses = std::get<Coop::Poses>(message->payload);
+      if(poses.world!=world->objectRegistry().worldNamespace())
+        throw std::runtime_error("Pose belongs to another world");
+      std::array<Npc*,2> actors = {};
+      for(size_t i=0; i<actors.size(); ++i) {
+        actors[i] = world->npcByObjectId(poses.world,poses.actors[i].object);
+        if(!actors[i] || !actors[i]->validateNetworkPose(poses.actors[i]))
+          throw std::runtime_error("Unknown pose identity or animation");
+        }
+      // Validate both actors before changing either presentation replica.
+      const std::array<Coop::ActorPose,2> displayed = {actors[0]->networkPose(),actors[1]->networkPose()};
+      networkInterpolation.push(*message,displayed,Tempest::Application::tickCount());
+      game.gameSession()->syncPresentationTick(poses.tick);
+      }
+
+    }
+  catch(const std::exception& error) {
+    Tempest::Log::e("Coop poses: ",error.what());
+    network.invalidate("pose_apply_failed");
+    }
   }

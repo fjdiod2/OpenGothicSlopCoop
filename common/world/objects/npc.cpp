@@ -392,6 +392,33 @@ void Npc::loadTrState(Serialize& fin) {
     transformSpl.reset(new TransformBack(*this, owner.script().getVm(), fin));
   }
 
+Coop::ActorPose Npc::networkPose() const {
+  Coop::ActorPose pose;
+  pose.player = owner.playerId(this);
+  pose.object = owner.objectId(this);
+  pose.position = {x,y,z};
+  pose.yaw = angle; pose.pitch = angleY; pose.roll = runAng;
+  const auto head = visual.headRotation();
+  pose.head = {head.x,head.y};
+  pose.layers = visual.pose().networkLayers();
+  return pose;
+  }
+
+bool Npc::validateNetworkPose(const Coop::ActorPose& pose) const {
+  return !owner.isAuthoritative() && pose.player==owner.playerId(this) && pose.object==owner.objectId(this) &&
+         visual.validateNetworkLayers(pose.layers);
+  }
+
+void Npc::applyNetworkPose(const Coop::ActorPose& pose) {
+  if(owner.isAuthoritative()) throw std::runtime_error("Cannot apply replica pose to authoritative NPC");
+  setPosition(pose.position[0],pose.position[1],pose.position[2]);
+  setDirection(pose.yaw);
+  angleY = pose.pitch;
+  setRunAngle(pose.roll);
+  visual.setHeadRotation(pose.head[0],pose.head[1]);
+  visual.applyNetworkLayers(pose.layers);
+  }
+
 bool Npc::setPosition(float ix, float iy, float iz) {
   if(x==ix && y==iy && z==iz)
     return false;

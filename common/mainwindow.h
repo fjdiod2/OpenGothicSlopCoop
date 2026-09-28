@@ -25,6 +25,7 @@
 #include <atomic>
 #include <set>
 #include "network/session.h"
+#include "network/interpolation.h"
 
 #include "world/world.h"
 #include "world/focus.h"
@@ -117,9 +118,12 @@ class MainWindow : public Tempest::Window {
     void networkKey(Tempest::KeyEvent& event, bool down);
     void sendNetworkInput(int x=0, int y=0);
     void tickNetworkInput();
+    void updateNetworkPoses();
     std::set<Tempest::Event::KeyType> networkKeys;
     uint32_t networkButtons = 0, remoteButtons = 0;
     uint64_t networkControlGeneration = 0;
+    uint64_t networkInstalledInput = 0;
+    Coop::PoseInterpolation networkInterpolation;
 
     // Local, opt-in development interface; all commands run on the game thread.
     void initTestControl();
@@ -137,6 +141,8 @@ class MainWindow : public Tempest::Window {
     std::string testRequestId;
     std::vector<Tempest::Event::KeyType> testHeldKeys;
     uint64_t testInputPlayer = 1;
+    uint64_t testHeldPlayer = 1;
+    bool testAsyncInput = false;
     PlayerControl& controlForPlayer(uint64_t id);
     void dispatchPlayerKey(uint64_t id, Tempest::KeyEvent& event, bool down);
     uint64_t testReleaseAt = 0;

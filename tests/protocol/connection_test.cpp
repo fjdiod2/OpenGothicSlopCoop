@@ -468,6 +468,100 @@ void inputValidation() {
   REQUIRE(guest.status().reason=="invalid_input_ack");
   }
 
+Poses posesFixture(uint64_t tick=100, uint64_t input=0) {
+  Poses poses;
+  poses.world = 99; poses.tick = tick; poses.appliedInput = input;
+  for(size_t i=0; i<2; ++i) {
+    poses.actors[i].player = i+1; poses.actors[i].object = i+11;
+    poses.actors[i].position = {float(i)*100.f,10.f,-5.f};
+    poses.actors[i].layers.push_back({"S_RUN",50,0,3,0});
+    }
+  return poses;
+  }
+
+void posesRoundtrip() {
+  Session host, guest;
+  host.start({Role::Host,0},identity(),0);
+  guest.start({Role::Guest,host.status().port},identity(),0);
+  pump(host,guest,[&] { return host.status().state=="connected"; });
+  const auto gen = host.status().generation;
+  REQUIRE(!host.sendPoses(gen,2,posesFixture()));
+  REQUIRE(host.bindCompanion(gen) && host.sendSnapshot(gen,1,Bytes{7}));
+  pump(host,guest,[&] { return guest.status().snapshotState=="received"; });
+  REQUIRE(guest.takeSnapshot() && guest.snapshotLoaded(gen,1));
+  pump(host,guest,[&] { return host.status().snapshotState=="ready"; });
+  REQUIRE(host.sendPoses(gen,2,posesFixture()));
+  pump(host,guest,[&] { return guest.status().posesReceived==2; });
+  const auto message = guest.takePoses();
+  REQUIRE(message && message->revision==2 && std::get<Poses>(message->payload)==posesFixture());
+  REQUIRE(host.status().posesAcknowledged==0 && !guest.takePoses());
+  REQUIRE(!guest.posesApplied(gen+1,2) && !guest.posesApplied(gen,3));
+  REQUIRE(guest.posesApplied(gen,2));
+  REQUIRE(!guest.posesApplied(gen,2));
+  pump(host,guest,[&] { return host.status().posesAcknowledged==2; });
+  REQUIRE(guest.sendInput({Forward,0,0}));
+  pump(host,guest,[&] { return host.status().inputReceived==1; });
+  REQUIRE(host.takeInput() && host.inputApplied(gen,1,3));
+  REQUIRE(!host.sendPoses(gen,3,posesFixture(99,1)));
+  REQUIRE(host.sendPoses(gen,3,posesFixture(130,1)));
+  pump(host,guest,[&] { return guest.status().posesReceived==3; });
+  REQUIRE(guest.status().inputAcknowledged==1 && guest.status().acknowledgedRevision==3);
+  REQUIRE(guest.takePoses() && guest.posesApplied(gen,3));
+  pump(host,guest,[&] { return host.status().posesAcknowledged==3; });
+  }
+
+void posesValidation() {
+  Session idle, guest;
+  for(int fault=0; fault<7; ++fault) {
+    Socket server;
+    guest.start({Role::Guest,server.listen()},identity(),0);
+    guest.tick(1);
+    Socket peer;
+    ::close(peer.fd);
+    peer.fd = ::accept(server.fd,nullptr,nullptr);
+    REQUIRE(peer.fd>=0);
+    sendMessage(peer,{12,0,0,0,Accepted{identity()}});
+    sendMessage(peer,{12,2,0,1,Welcome{}});
+    sendMessage(peer,{12,2,0,1,SnapshotBegin{1,hashBytes(Bytes{7})}});
+    sendMessage(peer,{12,2,0,1,SnapshotChunk{0,Bytes{7}}});
+    sendMessage(peer,{12,2,0,1,SnapshotEnd{}});
+    pump(idle,guest,[&] { return guest.status().snapshotState=="received"; });
+    REQUIRE(guest.takeSnapshot() && guest.snapshotLoaded(12,1));
+    if(fault==0) sendMessage(peer,{13,2,0,2,posesFixture()});
+    if(fault==1) sendMessage(peer,{12,1,0,2,posesFixture()});
+    if(fault==2) sendMessage(peer,{12,2,0,3,posesFixture()});
+    if(fault==3) sendMessage(peer,{12,2,0,2,posesFixture(100,1)});
+    if(fault==4 || fault==5) {
+      sendMessage(peer,{12,2,0,2,posesFixture()});
+      sendMessage(peer,{12,2,0,fault==4 ? 3u : 2u,posesFixture(fault==4 ? 99 : 100)});
+      }
+    if(fault==6) {
+      // Keep the reader ticking but deliberately never let the application
+      // take frames: its queue must fail closed at 65, not grow indefinitely.
+      for(uint64_t i=2; i<=66; ++i) {
+        sendMessage(peer,{12,2,0,i,posesFixture()});
+        if(i<66) pump(idle,guest,[&] { return guest.status().posesReceived==i; });
+        }
+      }
+    pump(idle,guest,[&] { return guest.status().state=="disconnected"; });
+    REQUIRE(!guest.takePoses() && guest.status().posesApplied==0);
+    }
+  Session host;
+  host.start({Role::Host,0},identity(),0);
+  Socket peer;
+  peer.connect(host.status().port);
+  sendMessage(peer,{0,0,0,0,identity()});
+  pump(host,idle,[&] { return host.status().state=="connected"; });
+  const auto gen = host.status().generation;
+  REQUIRE(host.bindCompanion(gen) && host.sendSnapshot(gen,1,Bytes{7}));
+  pump(host,idle,[&] { return host.status().snapshotState=="awaiting_ready"; });
+  sendMessage(peer,{gen,2,0,1,SnapshotReady{}});
+  pump(host,idle,[&] { return host.status().snapshotState=="ready"; });
+  sendMessage(peer,{gen,2,0,2,PoseAck{}}); // Nothing at revision 2 has been sent.
+  pump(host,idle,[&] { return host.status().state=="listening"; });
+  REQUIRE(host.status().reason=="invalid_pose_ack");
+  }
+
 struct Fixture {
   std::filesystem::path root = std::filesystem::temp_directory_path()/
     ("gothic-fingerprint-"+std::to_string(getpid()));
@@ -548,6 +642,8 @@ int main(int argc, char** argv) {
     else if(name=="snapshot-failures") snapshotFailures();
     else if(name=="input-roundtrip") inputRoundtrip();
     else if(name=="input-validation") inputValidation();
+    else if(name=="poses-roundtrip") posesRoundtrip();
+    else if(name=="poses-validation") posesValidation();
     else throw std::runtime_error("Unknown connection test");
     std::cout << "PASS: " << name << '\n';
     return 0;

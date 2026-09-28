@@ -105,6 +105,13 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("acknowledged_revision"); out.Uint64(net.acknowledgedRevision);
   out.Key("held_buttons"); out.Uint(networkButtons);
   out.Key("remote_buttons"); out.Uint(remoteButtons);
+  out.Key("poses_sent"); out.Uint64(net.posesSent);
+  out.Key("poses_received"); out.Uint64(net.posesReceived);
+  out.Key("poses_applied"); out.Uint64(net.posesApplied);
+  out.Key("poses_acknowledged"); out.Uint64(net.posesAcknowledged);
+  out.Key("pose_tick"); out.Uint64(net.poseTick);
+  out.Key("interpolation_ms"); out.Uint64(Coop::PoseInterpolation::DurationMs);
+  out.Key("interpolation_alpha"); out.Double(networkInterpolation.alpha());
   out.Key("bindings"); out.Uint64(net.bindings);
   out.Key("peers"); out.Uint64(net.peers);
   out.Key("accepted"); out.Uint64(net.accepted);
@@ -195,6 +202,16 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       out.Key("position"); out.StartArray();
       out.Double(pos.x); out.Double(pos.y); out.Double(pos.z); out.EndArray();
       out.Key("rotation"); out.Double(actor->rotation());
+      out.Key("animation_layers"); out.StartArray();
+      for(auto& layer:actor->networkPose().layers) {
+        out.StartObject();
+        out.Key("name"); str(layer.name);
+        out.Key("started"); out.Uint64(layer.started);
+        out.Key("body"); out.Uint(layer.body);
+        out.Key("combination"); out.Uint(layer.combination);
+        out.EndObject();
+        }
+      out.EndArray();
       out.Key("hp"); out.Int(actor->attribute(ATR_HITPOINTS));
       out.Key("hp_max"); out.Int(actor->attribute(ATR_HITPOINTSMAX));
       out.Key("camera_bone"); vec(actor->cameraBone(game.camera()->isFirstPerson()));
@@ -261,15 +278,19 @@ void MainWindow::pollTestControl() {
   testPollAt = now+25;
   try {
     if(!testHeldKeys.empty()) {
-      if(now<testReleaseAt)
-        return;
-      for(auto it=testHeldKeys.rbegin(); it!=testHeldKeys.rend(); ++it) {
-        KeyEvent up(*it, Event::M_NoModifier, Event::KeyUp);
-        dispatchPlayerKey(testInputPlayer, up, false);
+      if(now>=testReleaseAt) {
+        for(auto it=testHeldKeys.rbegin(); it!=testHeldKeys.rend(); ++it) {
+          KeyEvent up(*it, Event::M_NoModifier, Event::KeyUp);
+          dispatchPlayerKey(testHeldPlayer, up, false);
+          }
+        testHeldKeys.clear();
+        if(!testAsyncInput) {
+          replyTestControl(testRequestId);
+          return;
+          }
+        testAsyncInput = false;
         }
-      testHeldKeys.clear();
-      replyTestControl(testRequestId);
-      return;
+      else if(!testAsyncInput) return;
       }
     const auto request = fs::path(testControlDir)/"request.json";
     if(!fs::exists(request))
@@ -313,7 +334,7 @@ void MainWindow::pollTestControl() {
       }
     if(!game.player() && action!="screenshot_ui" && action!="start_game")
       throw std::runtime_error("No player is ready");
-    if(game.isNetworkPaused() && action!="key" && action!="chord" && action!="mouse" &&
+    if(game.isNetworkPaused() && action!="key" && action!="chord" && action!="hold_keys" && action!="release_keys" && action!="mouse" &&
        action!="screenshot" && action!="screenshot_ui" && action!="campaign_probe" && action!="save")
       throw std::runtime_error("Campaign held at snapshot boundary");
     testInputPlayer = game.localPlayerId();
@@ -322,13 +343,24 @@ void MainWindow::pollTestControl() {
         throw std::runtime_error("Unknown player identity");
       testInputPlayer = cmd["player"].GetUint64();
       }
-    if(action=="key" || action=="chord") {
+    if(action=="release_keys") {
+      for(auto key:testHeldKeys) {
+        KeyEvent up(key, Event::M_NoModifier, Event::KeyUp);
+        dispatchPlayerKey(testHeldPlayer,up,false);
+        }
+      testHeldKeys.clear();
+      testAsyncInput = false;
+      replyTestControl(testRequestId);
+      return;
+      }
+    if(action=="key" || action=="chord" || action=="hold_keys") {
+      if(!testHeldKeys.empty()) throw std::runtime_error("Test keys are already held");
       if(!cmd.HasMember("ms") || !cmd["ms"].IsUint() || cmd["ms"].GetUint()>5000)
         throw std::runtime_error("Expected a key and duration in 0..5000 ms");
       std::vector<std::string_view> names;
       if(action=="key" && cmd.HasMember("key") && cmd["key"].IsString())
         names.emplace_back(cmd["key"].GetString());
-      else if(action=="chord" && cmd.HasMember("keys") && cmd["keys"].IsArray()) {
+      else if((action=="chord" || action=="hold_keys") && cmd.HasMember("keys") && cmd["keys"].IsArray()) {
         for(auto& key:cmd["keys"].GetArray()) {
           if(!key.IsString())
             throw std::runtime_error("Key names must be strings");
@@ -356,10 +388,13 @@ void MainWindow::pollTestControl() {
         testHeldKeys.push_back(found);
         }
       testReleaseAt = now+cmd["ms"].GetUint();
+      testHeldPlayer = testInputPlayer;
+      testAsyncInput = action=="hold_keys";
       for(auto key:testHeldKeys) {
         KeyEvent down(key);
         dispatchPlayerKey(testInputPlayer, down, true);
         }
+      if(testAsyncInput) replyTestControl(testRequestId);
       return; // Reply after releasing the key; rendering/simulation keep running.
       }
     if(action=="select_local_player") {

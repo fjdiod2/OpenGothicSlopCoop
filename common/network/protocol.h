@@ -8,6 +8,7 @@
 #include <span>
 #include <stdexcept>
 #include <variant>
+#include <string>
 #include <vector>
 
 namespace Coop {
@@ -15,17 +16,20 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 3;
+inline constexpr uint16_t ProtocolVersion = 4;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
 inline constexpr size_t MaxQueueMessages   = 256;
 inline constexpr size_t MaxSnapshotBytes   = 64*1024*1024;
 inline constexpr size_t SnapshotChunkBytes = 32*1024;
+inline constexpr size_t MaxAnimationLayers = 8;
+inline constexpr size_t AnimationNameBytes = 64;
 
 enum class MessageType : uint16_t {
   Hello = 1, Welcome = 2, Input = 3, StateAck = 4, Reject = 5, Accepted = 6,
-  SnapshotBegin = 7, SnapshotChunk = 8, SnapshotEnd = 9, SnapshotReady = 10
+  SnapshotBegin = 7, SnapshotChunk = 8, SnapshotEnd = 9, SnapshotReady = 10,
+  Poses = 11, PoseAck = 12
   };
 
 enum class RejectReason : uint16_t {
@@ -78,8 +82,30 @@ struct SnapshotChunk {
 struct SnapshotEnd { bool operator==(const SnapshotEnd&) const = default; };
 struct SnapshotReady { bool operator==(const SnapshotReady&) const = default; };
 
+struct AnimationLayer {
+  std::string name;
+  uint64_t started = 0, blend = 0;
+  uint32_t body = 0;
+  uint8_t combination = 0;
+  bool operator==(const AnimationLayer&) const = default;
+  };
+struct ActorPose {
+  uint64_t player = 0, object = 0;
+  std::array<float,3> position = {};
+  float yaw = 0, pitch = 0, roll = 0;
+  std::array<float,2> head = {};
+  std::vector<AnimationLayer> layers;
+  bool operator==(const ActorPose&) const = default;
+  };
+struct Poses {
+  uint64_t world = 0, tick = 0, appliedInput = 0;
+  std::array<ActorPose,2> actors;
+  bool operator==(const Poses&) const = default;
+  };
+struct PoseAck { bool operator==(const PoseAck&) const = default; };
+
 using Payload = std::variant<Hello,Welcome,Input,StateAck,Reject,Accepted,
-                             SnapshotBegin,SnapshotChunk,SnapshotEnd,SnapshotReady>;
+                             SnapshotBegin,SnapshotChunk,SnapshotEnd,SnapshotReady,Poses,PoseAck>;
 
 struct Message {
   uint64_t generation = 0;

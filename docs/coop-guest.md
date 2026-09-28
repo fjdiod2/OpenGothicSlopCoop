@@ -1,9 +1,9 @@
-# Guest authority (N07–N09)
+# Guest authority (N07–N10)
 
 The campaign is simulated and saved by the host. `-coop-join 127.0.0.1:PORT`
 selects guest mode for the process, including before a world exists and after
 connection refusal, timeout or disconnect. The guest does not become a host if
-its connection fails. N08 uses wire version 3 and checkpoint version 56.
+its connection fails. N10 uses wire version 4 and checkpoint version 56.
 
 ## Loading
 
@@ -50,8 +50,14 @@ The main window keeps rendering and camera mouse/zoom handling active. It skips
 dialogue, inventory and player simulation. Explicit nonlocal
 controllers, Marvin commands and mutating UI shortcuts are blocked. N09 routes
 normal movement/turning keys and mouse intent to the assigned host controller
-after snapshot readiness; guest input never drives local gameplay. Until N10, the guest
-plays the saved pose animation without receiving new host poses.
+after snapshot readiness; guest input never drives local gameplay. N10 receives
+both players' typed poses and animation layers, validates them together, and
+interpolates displayed transforms over 100 ms without predicting movement.
+The pose importer changes position/orientation and animation descriptors only.
+It does not call normal animation-start functions, gameplay tags, root-motion
+integration or the VM. The presentation clock follows received host ticks;
+the campaign clock stays at the snapshot tick. The guest acknowledges a pose
+revision only when both displayed transforms reach its exact endpoints.
 
 Additional authority checks protect damage/attribute changes, pickup/use,
 world item/NPC creation and removal, queued/immediate/startup triggers, region
@@ -97,3 +103,18 @@ campaign event replication, dialogue ownership and joint region
 travel remain later tasks. Screenshots, detailed
 states, per-entry hashes, logs and cleanup evidence are retained by the runner;
 the parent `TESTING.md` records completed runs.
+
+## Replication acceptance (N10)
+
+`python3 tools/run-gothic-tests.py --scenario pose-replication` holds ordinary
+keys in both windows concurrently, observes movement and changed animation
+layers in both replicas, and exercises opposite turns. It then holds host
+simulation and requires the same acknowledged pose revision, typed identities,
+HP/inventories and animation descriptors. Settled tolerances are 0.01 game units
+and 0.01 degrees; camera targets must follow their own actors within 2 units.
+Both viewpoints and moving captures are retained. All other nonvisual campaign
+archive entries remain byte-for-byte unchanged; only the two player data records
+are excluded because they contain replicated transforms. Campaign tick/function
+counts stay fixed. A fixture host then sends unknown world/object/animation
+references after a real snapshot; the guest must reject them before changing
+either actor. This supplements the N07 effect-attempt and save-denial regression.

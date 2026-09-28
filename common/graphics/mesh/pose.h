@@ -7,6 +7,7 @@
 #include "animation.h"
 #include "animationsolver.h"
 #include "resources.h"
+#include "network/protocol.h"
 
 class Skeleton;
 class Serialize;
@@ -32,6 +33,9 @@ class Pose final {
 
     void               save(Serialize& fout);
     void               load(Serialize& fin, const AnimationSolver &solver);
+    std::vector<Coop::AnimationLayer> networkLayers() const;
+    bool               validateNetworkLayers(const std::vector<Coop::AnimationLayer>& layers, const AnimationSolver& solver) const;
+    void               applyNetworkLayers(const std::vector<Coop::AnimationLayer>& layers, const AnimationSolver& solver);
 
     void               setFlags(Flags f);
     BodyState          bodyState() const;

@@ -41,10 +41,22 @@ Message input(uint64_t sequence=9) {
 
 // Independent literal from docs/coop-protocol.md, not constructed by the codec.
 Bytes goldenInput() {
-  return hex("4f4743500000003400030003"
+  return hex("4f4743500000003400040003"
              "0102030405060708" "0000000000000002"
              "0000000000000009" "0000000000000000"
              "00000081fffb0064");
+  }
+
+Poses samplePoses() {
+  Poses poses;
+  poses.world = 123; poses.tick = 100;
+  for(size_t i=0; i<2; ++i) {
+    poses.actors[i].player = i+1; poses.actors[i].object = i+11;
+    poses.actors[i].position = {1.25f,-2.5f,3.f};
+    poses.actors[i].yaw = 90;
+    poses.actors[i].layers.push_back({"S_RUN",50,0,3,0});
+    }
+  return poses;
   }
 
 std::vector<Message> examples() {
@@ -70,7 +82,9 @@ std::vector<Message> examples() {
     {4,2,0,1,SnapshotBegin{100,{}}},
     {4,2,0,1,SnapshotChunk{0,{1,2,3}}},
     {4,2,0,1,SnapshotEnd{}},
-    {4,2,0,1,SnapshotReady{}}
+    {4,2,0,1,SnapshotReady{}},
+    {4,2,0,2,samplePoses()},
+    {4,2,0,2,PoseAck{}}
     };
   }
 
@@ -93,6 +107,15 @@ void drain(Decoder& decoder, const std::vector<Message>& expected) {
   }
 
 void golden() {
+  const auto pose = encode({4,2,0,2,samplePoses()});
+  const auto prefix = hex("4f474350000005f60004000b"
+                          "0000000000000004" "0000000000000002"
+                          "0000000000000000" "0000000000000002"
+                          "000000000000007b" "0000000000000064" "0000000000000000"
+                          "0000000000000001" "000000000000000b"
+                          "3fa00000c02000004040000042b40000"
+                          "00000000000000000000000000000000" "01535f52554e");
+  REQUIRE(pose.size()==1526 && std::equal(prefix.begin(),prefix.end(),pose.begin()));
   const auto bytes = goldenInput();
   REQUIRE(bytes.size()==52);
   REQUIRE(encode(input())==bytes);
@@ -114,7 +137,7 @@ void messageTypes() {
     }
   // A second literal covers the variable fingerprints and byte order of a
   // different message type, so matching encode/decode bugs cannot hide it.
-  const auto hello = hex("4f4743500000006c00030001"
+  const auto hello = hex("4f4743500000006c00040001"
                          "00000000000000000000000000000000"
                          "00000000000000000000000000000000"
                          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -229,6 +252,14 @@ void malformedHeader() {
   }
 
 void malformedPayload() {
+  for(auto [offset,value]:std::vector<std::pair<size_t,uint8_t>>{{116,9},{123,65},{202,65},{84,0x7f}}) {
+    auto bytes = encode({4,2,0,2,samplePoses()});
+    // Count overflow, invalid padding, a nonzero unused slot, and NaN x.
+    if(offset==84) { bytes[84]=0x7f; bytes[85]=0xc0; bytes[86]=bytes[87]=0; }
+    else bytes[offset] = value;
+    Decoder decoder;
+    error(ProtocolErrorCode::Fields,[&] { decoder.feed(bytes); });
+    }
   for(auto [offset,value]: std::vector<std::pair<size_t,uint8_t>>{
         {44,1},{46,1},{48,0x04},{48,0x80},{50,0x04},{50,0x80}}) {
     auto bytes = goldenInput();
@@ -256,6 +287,16 @@ void malformedPayload() {
   }
 
 void encodeValidation() {
+  for(int fault=0; fault<6; ++fault) {
+    auto poses = samplePoses();
+    if(fault==0) poses.actors[1].object = poses.actors[0].object;
+    if(fault==1) poses.actors[0].layers[0].started = 101;
+    if(fault==2) poses.actors[0].layers[0].name = std::string(65,'A');
+    if(fault==3) poses.actors[0].position[0] = std::numeric_limits<float>::infinity();
+    if(fault==4) poses.actors[0].layers.resize(9);
+    if(fault==5) poses.world = 0;
+    error(ProtocolErrorCode::Fields,[&] { encode({4,2,0,2,poses}); });
+    }
   for(auto message:examples()) {
     if(std::holds_alternative<Hello>(message.payload) || std::holds_alternative<Reject>(message.payload))
       message.generation = 1;

@@ -109,6 +109,36 @@ void Pose::load(Serialize &fin, const AnimationSolver& solver) {
     fin.read(i);
   }
 
+std::vector<Coop::AnimationLayer> Pose::networkLayers() const {
+  std::vector<Coop::AnimationLayer> result;
+  for(auto& layer:lay)
+    result.push_back({layer.seq->name,layer.sAnim,layer.sBlend,uint32_t(layer.bs),layer.comb});
+  return result;
+  }
+
+bool Pose::validateNetworkLayers(const std::vector<Coop::AnimationLayer>& layers, const AnimationSolver& solver) const {
+  std::vector<uint32_t> occupied;
+  for(auto& layer:layers) {
+    const auto seq = solver.solveFrm(layer.name);
+    if(!seq || !seq->data || layer.combination>seq->comb.size() ||
+       std::find(occupied.begin(),occupied.end(),seq->layer)!=occupied.end()) return false;
+    occupied.push_back(seq->layer);
+    }
+  return true;
+  }
+
+void Pose::applyNetworkLayers(const std::vector<Coop::AnimationLayer>& layers, const AnimationSolver& solver) {
+  if(networkLayers()==layers) return;
+  // Animation descriptors only: no startAnim, gameplay tags, root motion or VM.
+  for(auto& layer:lay) onRemoveLayer(layer);
+  lay.clear();
+  for(auto& source:layers) {
+    lay.push_back({solver.solveFrm(source.name),source.started,source.blend,source.combination,BodyState(source.body)});
+    onAddLayer(lay.back());
+    }
+  needToUpdate = true;
+  }
+
 void Pose::setFlags(Pose::Flags f) {
   flag         = f;
   needToUpdate = true;

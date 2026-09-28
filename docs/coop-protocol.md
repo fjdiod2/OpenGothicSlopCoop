@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 3 (N09)
+# Co-op wire protocol, version 4 (N10)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -15,7 +15,8 @@ N07 makes the guest a presentation-only process; N08 transfers a host checkpoint
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
 
-Version 3 adds snapshot begin/chunk/end/readiness messages. Older versions are
+Version 4 adds character poses/animation layers and pose acknowledgements.
+Version 3 added snapshot begin/chunk/end/readiness messages. Older versions are
 rejected explicitly. Version 2 introduced `Accepted`, separating compatibility
 from companion assignment. Existing messages retain their layouts, apart from
 the required version field. The exact executable fingerprint also prevents
@@ -38,8 +39,9 @@ clock separation, blocked effects and the acceptance test. `connected` and
 
 All integers are unsigned, big-endian, unless explicitly marked signed. Signed
 16-bit values use two's complement. Serialize fields individually: C++ object
-layout, padding, native endianness, pointers and engine save serialization are
-never part of this wire format. Fingerprints are raw bytes, not hexadecimal text.
+layout, padding, native endianness and pointers are never used for wire fields.
+The snapshot body is explicitly an opaque compatible engine checkpoint.
+Fingerprints are raw bytes, not hexadecimal text.
 
 Every frame begins with this 44-byte header. Offsets are zero-based:
 
@@ -47,18 +49,19 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `3` |
+| 8 | 2 | Version | Exactly `4` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
 | 28 | 8 | Input sequence | Nonzero only in `Input` |
-| 36 | 8 | State revision | Nonzero in `Welcome`, `StateAck` and snapshot messages |
+| 36 | 8 | State revision | Nonzero in `Welcome`, `StateAck`, snapshot and pose messages |
 
 The frame length must be between 44 and 65,536 bytes inclusive. Fixed messages
 have exact lengths. `SnapshotChunk` permits only its eight-byte offset and
 1–32,768 data bytes (53–32,820 bytes total). The decoder validates the prefix
 after eight bytes and the complete header before buffering the body. Padding
-and undeclared extensions are forbidden.
+and undeclared extensions are forbidden except for the explicitly zero-padded
+animation-name/unused slots specified below.
 
 ## Message definitions
 
@@ -74,6 +77,8 @@ and undeclared extensions are forbidden.
 | 8 | `SnapshotChunk` | Host → guest | 53–32,820 | `nonzero / 2 / 0 / nonzero` |
 | 9 | `SnapshotEnd` | Host → guest | 44 | `nonzero / 2 / 0 / nonzero` |
 | 10 | `SnapshotReady` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
+| 11 | `Poses` | Host → guest | 1,526 | `nonzero / 2 / 0 / nonzero` |
+| 12 | `PoseAck` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
 
 ### Hello
 
@@ -122,7 +127,7 @@ generation. Repeating it for the live generation succeeds without another frame.
 
 The host sends `Welcome(generation, player=2, sequence=0, revision=1)` after
 `Accepted`. Revision 1 is the initial binding/snapshot baseline; ongoing
-revision tracking awaits N10. The guest requires the accepted generation,
+pose revisions start at 2 after snapshot readiness. The guest requires the accepted generation,
 ID 2 and revision 1. A mismatched or repeated `Welcome` closes it with
 `invalid_binding`; one before `Accepted` fails the handshake. A guest sending
 `Welcome` to the host, or naming host/unknown player IDs after acceptance, is
@@ -235,14 +240,87 @@ The full disconnect/save acceptance scenario remains N11–N13.
 | --- | --- | --- |
 | 44 | 8 | Highest consecutively applied input sequence, or zero before any input |
 
-N09 enables this after applying input to the assigned controller. The header
-revision is currently the snapshot baseline 1; advancing pose revisions are N10.
-This acknowledges control-state application, not a completed movement tick or
-committed save. The guest rejects acknowledgements for another generation/player,
-sequences it never sent, or decreasing sequence/revision. This message carries
-a revision and acknowledgement only; it contains no
-pose or world state and does not replicate either. N08 snapshots and N10 pose
-updates use separate messages.
+N10 queues this after the host's simulation/controller step, immediately before
+the corresponding `Poses` frame at the same revision. Acknowledged inputs have
+been installed in companion control; future movement while a button remains
+held still belongs to future host ticks. The pose frame repeats the highest
+applied sequence. The guest rejects acknowledgements for another generation/player,
+sequences it never sent, or decreasing sequence/revision. This acknowledges no
+disk save and contains no transforms. The independent `PoseAck` below confirms
+that guest presentation reached a particular pose endpoint.
+
+### Poses (N10)
+
+All floats are finite IEEE-754 binary32, transmitted as big-endian bit patterns.
+This fixed 1,526-byte frame contains a 24-byte prefix and two 729-byte actor
+records in player order 1, 2. No native structs, pointers or array indexes cross
+the wire. The header's player 2 identifies the recipient binding, not an actor
+index within the payload.
+
+| Payload offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 8 | Persistent world-object namespace, nonzero |
+| 8 | 8 | Authoritative simulation tick (milliseconds) |
+| 16 | 8 | Highest applied guest input sequence |
+| 24 | 729 | Host actor record |
+| 753 | 729 | Companion actor record |
+
+Each actor record is:
+
+| Actor offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 8 | Persistent player role (1 then 2) |
+| 8 | 8 | Persistent typed NPC object ID, nonzero and distinct |
+| 16 | 12 | Position x/y/z, float32 each |
+| 28 | 12 | Yaw, pitch, running tilt, float32 degrees each |
+| 40 | 8 | Head rotation x/y, float32 each |
+| 48 | 1 | Active layer count, 0–8 |
+| 49 | 680 | Eight fixed 85-byte animation slots |
+
+Each active slot holds a 64-byte printable-ASCII sequence name, zero-padded
+(unless all 64 bytes are used), u64 animation-start tick, u64 blend elapsed
+milliseconds, u32 body-state flags, and u8 combination index. Unused slots must
+be entirely zero. Names are nonempty, start tick cannot exceed the frame tick,
+body flags must fit 17 bits and combination must be 0–9. The engine additionally
+resolves names in the loaded compatible skeleton/overlays, checks combination
+bounds and rejects duplicate animation layers. Position components are bounded
+to ±10,000,000 game units; yaw ±1,000,000°, pitch ±90°, tilt/head rotation ±360°.
+NaN, infinity, invalid counts, padding or identities are rejected by the codec.
+
+After readiness, pose revisions start at 2 and increase by exactly one. Host
+capture occurs after its simulation and controller step, at most once per render
+frame, and is skipped when both the tick and applied-input boundary are unchanged.
+Guest frames must match generation/binding, arrive in revision order, carry
+nondecreasing host ticks/applied-input sequences and never refer to unsent input.
+There is a separate 64-frame application queue; overflow closes the connection.
+The guest resolves both typed NPC IDs in the received world namespace and validates
+both animations before applying either actor. Invalid world/object/animation
+state closes the connection without partially applying the frame.
+
+### PoseAck and presentation
+
+`PoseAck` has no body. The header identifies the generation, binding and revision
+whose two displayed transforms reached their exact authoritative endpoints.
+The host accepts only nondecreasing acknowledgements for revisions it sent,
+strictly after the snapshot baseline. Acknowledgements may skip intermediate
+revisions while movement is being interpolated. `poses_received` alone is not
+proof of a rendered endpoint.
+
+The guest interpolates positions, pitch and running tilt over 100 ms toward the
+latest validated target; yaw takes the shortest arc across ±180°. It advances
+the previous blend before retargeting from the displayed transforms. Identical
+transform updates keep the existing blend deadline, so stopping reaches the
+exact endpoint. A displacement over 1,000 units or a changed generation/world/
+object identity snaps instead. No extrapolation or movement prediction runs.
+The animation layer descriptors and head rotation come from the host; the guest
+samples bone animation on its presentation clock synchronized to received host
+ticks. Campaign time and all animation gameplay effects stay host-only.
+Each window's existing local camera follows its own actor (host 1, guest 2).
+
+Only these two characters' movement/animation is replicated. NPC AI, combat,
+inventory changes, dialogue, quests and other world changes still require the
+later gameplay tasks. See [guest authority](coop-guest.md) for the immutable
+campaign boundary. `Poses` does not imply a full-world revision or a disk commit.
 
 ### Reject
 
@@ -254,7 +332,7 @@ Reasons: `1` protocol version, `2` engine fingerprint, `3` game-data fingerprint
 `4` host full, `5` invalid session/handshake. Any other value is malformed. No
 arbitrary error string crosses the wire. A reject is a terminal handshake reply,
 followed by closing the connection. On an undecodable/unsupported peer version,
-closing without a reply is also valid; a peer might not understand a version-3
+closing without a reply is also valid; a peer might not understand a version-4
 reject. Runtime connection failure and stale input are handled by the session
 layer, not by sending an unbound reject in the middle of gameplay.
 
@@ -262,7 +340,7 @@ layer, not by sending an unbound reject in the middle of gameplay.
 
 The codec validates structural constraints. The session enforces compatibility,
 direction/phase checks, admission, companion assignment, snapshot readiness and
-input sequence tracking. Advancing pose revisions are N10.
+input sequence tracking and advancing pose revisions.
 
 1. An unbound connection accepts one `Hello`. The host either rejects it or
    returns one `Accepted`. Both sides verify compatibility; only then may the
@@ -285,7 +363,7 @@ input sequence tracking. Advancing pose revisions are N10.
    Old-generation input cannot mutate the current world. Do not wrap sequence
    counters; establish a new generation before exhaustion.
 5. Host revisions start at 1 and increase for authoritative state changes.
-   N09 retains the snapshot revision until N10. Repeated acknowledgements may
+   N10 advances pose revisions after readiness. Repeated acknowledgements may
    have the same revision and applied-input value;
    neither may decrease within a generation. An acknowledgement cannot refer to
    input the guest has not sent. Revisions are scoped by generation, and must not
@@ -300,8 +378,9 @@ world while the asynchronous loader owns it. Disconnect preserves the companion
 in the host world and its next checkpoint, while clearing transport authority.
 Restart loads the version-1 `coop/players` roster, which accepts only IDs 1 and 2;
 no socket binding/generation is stored in a save. Rejoining resolves that actor
-and receives a fresh generation. Synchronizing active input with a checkpoint,
-clearing held network input and coordinating save/load input remain N09–N14.
+and receives a fresh generation. N09–N10 clear basic held input on generation
+loss; full disconnect/rejoin and
+coordinated save/load acceptance remain N11–N14.
 
 ## Starting and observing a connection
 
@@ -353,7 +432,10 @@ owns companion ID 2 on the host. Input observations add `input_sent`,
 `input_received`, `input_applied`,
 `input_acknowledged`, `acknowledged_revision`, cumulative `input_duplicates` /
 `input_stale`, guest `held_buttons` and host `remote_buttons`. Sequence counters
-reset with the generation. `snapshot_state == "ready"` reports snapshot
+reset with the generation. N10 adds `poses_sent`, `poses_received`, `poses_applied`,
+`poses_acknowledged`, `pose_tick`, `interpolation_ms` and `interpolation_alpha`.
+`poses_applied` is the last exact displayed endpoint, while `pose_tick` describes
+the most recent sent/received target. `snapshot_state == "ready"` reports snapshot
 activation (guest) or receipt of that acknowledgement (host).
 
 ## Exact compatibility fingerprint inputs
@@ -441,7 +523,7 @@ This 52-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 00000034 0003 0003
+4f474350 00000034 0004 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
@@ -452,12 +534,16 @@ checks an independent `Hello` vector, every split point and byte-at-a-time input
 combined frames, invalid headers/payloads, all truncated prefixes, bounded queues,
 blocked/partial writes, 10,000 ordered input messages under changing read/write
 boundaries and 10,000 deterministic mutated/truncated frames.
-On macOS, eleven additional test cases exercise endpoint parsing, real loopback
+On macOS, thirteen additional test cases exercise endpoint parsing, real loopback
 acceptance and reconnect, both directions of fingerprint validation, version
 rejection, second-guest rejection, deadlines, pending-socket limits, and the
 actual file/manifest hash implementation using temporary files. Input tests cover
 readiness, delivery/acknowledgement, duplicate and old-generation packets, gaps,
 wrong identities, reserved actions, application queue bounds and impossible acks.
+Pose cases cover typed fields, exact floats, a literal prefix, readiness, sequence
+order, time/input boundaries, applied-revision acknowledgements and queue limits.
+Interpolation tests cover midpoints, retarget continuity, shortest-arc turns,
+stationary completion, backward clocks, large jumps and generation/world resets.
 Binding tests cover host-only assignment, idempotence, reconnect/load invalidation, second-guest
 isolation, incorrect IDs/generations/revisions, early/duplicate Welcome frames,
 and forged guest assignments/inputs. The engine integration test additionally
@@ -468,8 +554,8 @@ checks live and saved NPC reuse, separate inventory/HP/poses and script identity
 Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
 assets, start a GUI, or require initialized engine submodules. It runs 13 codec
-cases plus four object-registry cases everywhere, and eleven connection/fingerprint
-cases on macOS (28 total); the latter use
+cases plus four object-registry and two interpolation cases everywhere, and
+thirteen connection/fingerprint cases on macOS (32 total); the latter use
 loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh

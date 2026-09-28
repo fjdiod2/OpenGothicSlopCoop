@@ -60,6 +60,7 @@ class GameSession final {
     uint64_t     tickCount() const { return ticks; }
     bool         isAuthoritative() const { return authority==Authority::Campaign; }
     uint64_t     presentationTickCount() const { return isAuthoritative() ? ticks : presentationTicks; }
+    void         syncPresentationTick(uint64_t tick) { if(!isAuthoritative()) presentationTicks = tick; }
 
     void         setTimeMultiplyer(float t);
 

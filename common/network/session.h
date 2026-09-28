@@ -31,6 +31,7 @@ struct NetworkStatus {
   Fingerprint snapshotDigest = {};
   uint64_t inputSent = 0, inputReceived = 0, inputApplied = 0, inputAcknowledged = 0;
   uint64_t inputDuplicates = 0, inputStale = 0, acknowledgedRevision = 0;
+  uint64_t posesSent = 0, posesReceived = 0, posesApplied = 0, posesAcknowledged = 0, poseTick = 0;
   };
 
 struct Snapshot {
@@ -59,6 +60,9 @@ class Session final {
     bool sendInput(Input input);
     std::optional<Message> takeInput();
     bool inputApplied(uint64_t generation, uint64_t sequence, uint64_t revision);
+    bool sendPoses(uint64_t generation, uint64_t revision, const Poses& poses);
+    std::optional<Message> takePoses();
+    bool posesApplied(uint64_t generation, uint64_t revision);
     // Discard connection authority on world replacement; retain the listener.
     void invalidate(const std::string& reason);
     const NetworkStatus& status() const;

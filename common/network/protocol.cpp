@@ -2,9 +2,13 @@
 
 #include <algorithm>
 #include <utility>
+#include <bit>
+#include <cmath>
+#include <limits>
 
 namespace Coop {
 namespace {
+static_assert(sizeof(float)==4 && std::numeric_limits<float>::is_iec559);
 
 [[noreturn]] void invalid(ProtocolErrorCode code, const char* message) {
   throw ProtocolError(code,message);
@@ -44,7 +48,9 @@ size_t bodySize(MessageType type) {
     case MessageType::SnapshotBegin: return 40;
     case MessageType::SnapshotChunk: return 8; // Offset prefix; bounded data follows.
     case MessageType::SnapshotEnd:
-    case MessageType::SnapshotReady: return 0;
+    case MessageType::SnapshotReady:
+    case MessageType::PoseAck: return 0;
+    case MessageType::Poses: return 24+2*(49+MaxAnimationLayers*(AnimationNameBytes+21));
     }
   invalid(ProtocolErrorCode::Type,"Unknown co-op message type");
   }
@@ -62,6 +68,8 @@ void validateHeader(const Message& message, MessageType type) {
     case MessageType::SnapshotChunk:
     case MessageType::SnapshotEnd:
     case MessageType::SnapshotReady:
+    case MessageType::Poses:
+    case MessageType::PoseAck:
       valid = message.generation!=0 && message.player!=0 && message.sequence==0 && message.revision!=0;
       break;
     case MessageType::Input:
@@ -76,6 +84,26 @@ void validateHeader(const Message& message, MessageType type) {
   }
 
 void validatePayload(const Message& message) {
+  if(auto poses = std::get_if<Poses>(&message.payload)) {
+    if(poses->world==0 || poses->actors[0].player!=1 || poses->actors[1].player!=2 ||
+       poses->actors[0].object==0 || poses->actors[1].object==0 || poses->actors[0].object==poses->actors[1].object)
+      invalid(ProtocolErrorCode::Fields,"Invalid pose identities");
+    const auto bounded = [](float value, float max) { return std::isfinite(value) && std::abs(value)<=max; };
+    for(auto& actor:poses->actors) {
+      for(float value:actor.position)
+        if(!bounded(value,1e7f)) invalid(ProtocolErrorCode::Fields,"Invalid pose position");
+      if(!bounded(actor.yaw,1e6f) || !bounded(actor.pitch,90.f) || !bounded(actor.roll,360.f) ||
+         !bounded(actor.head[0],360.f) || !bounded(actor.head[1],360.f) || actor.layers.size()>MaxAnimationLayers)
+        invalid(ProtocolErrorCode::Fields,"Invalid pose orientation or layers");
+      for(auto& layer:actor.layers) {
+        if(layer.name.empty() || layer.name.size()>AnimationNameBytes || layer.started>poses->tick ||
+           layer.body>0x1ffff || layer.combination>9)
+          invalid(ProtocolErrorCode::Fields,"Invalid animation layer");
+        for(char c:layer.name)
+          if(c<32 || c>126) invalid(ProtocolErrorCode::Fields,"Invalid animation name");
+        }
+      }
+    }
   if(auto begin = std::get_if<SnapshotBegin>(&message.payload)) {
     if(begin->bytes==0 || begin->bytes>MaxSnapshotBytes)
       invalid(ProtocolErrorCode::Size,"Invalid snapshot size");
@@ -138,6 +166,8 @@ Message readHeader(std::span<const uint8_t> bytes) {
     case MessageType::SnapshotChunk: message.payload = SnapshotChunk{}; break;
     case MessageType::SnapshotEnd: message.payload = SnapshotEnd{}; break;
     case MessageType::SnapshotReady: message.payload = SnapshotReady{}; break;
+    case MessageType::Poses: message.payload = Poses{}; break;
+    case MessageType::PoseAck: message.payload = PoseAck{}; break;
     }
   return message;
   }
@@ -156,7 +186,39 @@ Message decode(std::span<const uint8_t> bytes) {
     case MessageType::Welcome:
     case MessageType::SnapshotEnd:
     case MessageType::SnapshotReady:
+    case MessageType::PoseAck:
       break;
+    case MessageType::Poses: {
+      Poses poses;
+      size_t offset = HeaderBytes;
+      const auto integer = [&](size_t width) { auto v = get(bytes,offset,width); offset += width; return v; };
+      const auto number = [&] { return std::bit_cast<float>(uint32_t(integer(4))); };
+      poses.world = integer(8); poses.tick = integer(8); poses.appliedInput = integer(8);
+      for(auto& actor:poses.actors) {
+        actor.player = integer(8); actor.object = integer(8);
+        for(auto& value:actor.position) value = number();
+        actor.yaw = number(); actor.pitch = number(); actor.roll = number();
+        for(auto& value:actor.head) value = number();
+        const auto count = integer(1);
+        if(count>MaxAnimationLayers) invalid(ProtocolErrorCode::Fields,"Too many pose layers");
+        for(size_t i=0; i<MaxAnimationLayers; ++i) {
+          AnimationLayer layer;
+          bool padding = false;
+          for(size_t n=0; n<AnimationNameBytes; ++n) {
+            const auto c = integer(1);
+            if(c==0) padding = true;
+            else if(padding) invalid(ProtocolErrorCode::Fields,"Invalid animation name padding");
+            else layer.name.push_back(char(c));
+            }
+          layer.started = integer(8); layer.blend = integer(8);
+          layer.body = uint32_t(integer(4)); layer.combination = uint8_t(integer(1));
+          if(i<count) actor.layers.push_back(std::move(layer));
+          else if(layer!=AnimationLayer{}) invalid(ProtocolErrorCode::Fields,"Nonzero unused pose layer");
+          }
+        }
+      message.payload = std::move(poses);
+      break;
+      }
     case MessageType::SnapshotBegin: {
       SnapshotBegin begin;
       begin.bytes = get(bytes,44,8);
@@ -198,6 +260,8 @@ MessageType messageType(const Message& message) {
   if(std::holds_alternative<SnapshotChunk>(message.payload)) return MessageType::SnapshotChunk;
   if(std::holds_alternative<SnapshotEnd>(message.payload)) return MessageType::SnapshotEnd;
   if(std::holds_alternative<SnapshotReady>(message.payload)) return MessageType::SnapshotReady;
+  if(std::holds_alternative<Poses>(message.payload)) return MessageType::Poses;
+  if(std::holds_alternative<PoseAck>(message.payload)) return MessageType::PoseAck;
   invalid(ProtocolErrorCode::Type,"Missing co-op payload");
   }
 
@@ -229,7 +293,28 @@ Bytes encode(const Message& message) {
     case MessageType::Welcome:
     case MessageType::SnapshotEnd:
     case MessageType::SnapshotReady:
+    case MessageType::PoseAck:
       break;
+    case MessageType::Poses: {
+      const auto& poses = std::get<Poses>(message.payload);
+      const auto number = [&](float v) { put(bytes,std::bit_cast<uint32_t>(v),4); };
+      put(bytes,poses.world,8); put(bytes,poses.tick,8); put(bytes,poses.appliedInput,8);
+      for(auto& actor:poses.actors) {
+        put(bytes,actor.player,8); put(bytes,actor.object,8);
+        for(float value:actor.position) number(value);
+        number(actor.yaw); number(actor.pitch); number(actor.roll);
+        for(float value:actor.head) number(value);
+        put(bytes,actor.layers.size(),1);
+        for(size_t i=0; i<MaxAnimationLayers; ++i) {
+          if(i>=actor.layers.size()) { bytes.resize(bytes.size()+AnimationNameBytes+21,0); continue; }
+          auto& layer = actor.layers[i];
+          bytes.insert(bytes.end(),layer.name.begin(),layer.name.end());
+          bytes.resize(bytes.size()+AnimationNameBytes-layer.name.size(),0);
+          put(bytes,layer.started,8); put(bytes,layer.blend,8); put(bytes,layer.body,4); put(bytes,layer.combination,1);
+          }
+        }
+      break;
+      }
     case MessageType::SnapshotBegin: {
       const auto& begin = std::get<SnapshotBegin>(message.payload);
       put(bytes,begin.bytes,8);

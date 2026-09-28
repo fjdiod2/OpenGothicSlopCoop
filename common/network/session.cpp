@@ -99,6 +99,8 @@ struct Session::Impl {
     Fingerprint digest = {};
     uint64_t receivedInput = 0, appliedInput = 0;
     std::deque<Message> inputs;
+    std::deque<Message> poses;
+    uint64_t poseInput = 0;
     explicit Peer(int fd, uint64_t now):socket(fd),started(now) {}
     };
   std::unique_ptr<Socket> listener;
@@ -110,6 +112,7 @@ struct Session::Impl {
     state.snapshotDigest = {};
     state.inputSent = state.inputReceived = state.inputApplied = state.inputAcknowledged = 0;
     state.acknowledgedRevision = 0;
+    state.posesSent = state.posesReceived = state.posesApplied = state.posesAcknowledged = state.poseTick = 0;
     }
 
   void event(const std::string& reason) {
@@ -154,6 +157,30 @@ struct Session::Impl {
 
   bool receiveMessage(Peer& peer, const Message& message, uint64_t now) {
     const auto type = messageType(message);
+    if(type==MessageType::Poses || type==MessageType::PoseAck) {
+      if(peer.stage!=Peer::Connected || peer.transfer!=Peer::Ready ||
+         message.generation!=peer.generation || message.player!=PlayerIdentity::Companion) {
+        event("invalid_pose_session"); return false;
+        }
+      if(auto poses = std::get_if<Poses>(&message.payload)) {
+        if(state.role!=Role::Guest || message.revision!=std::max(state.snapshotRevision,state.posesReceived)+1 ||
+           poses->tick<state.poseTick || poses->appliedInput<peer.poseInput || poses->appliedInput>state.inputSent ||
+           peer.poses.size()>=64) {
+          event("invalid_pose_order"); return false;
+          }
+        peer.poses.push_back(message);
+        state.posesReceived = message.revision;
+        state.poseTick = poses->tick;
+        peer.poseInput = poses->appliedInput;
+        return true;
+        }
+      if(state.role!=Role::Host || message.revision<=state.snapshotRevision ||
+         message.revision<state.posesAcknowledged || message.revision>state.posesSent) {
+        event("invalid_pose_ack"); return false;
+        }
+      state.posesAcknowledged = message.revision;
+      return true;
+      }
     if(peer.stage==Peer::Connected && peer.bound && peer.transfer==Peer::Ready &&
        state.role==Role::Host && type==MessageType::Input) {
       if(message.player!=PlayerIdentity::Companion) { event("authority_violation"); return false; }
@@ -526,6 +553,53 @@ bool Session::inputApplied(uint64_t generation, uint64_t sequence, uint64_t revi
     }
 #else
   (void)generation; (void)sequence; (void)revision;
+#endif
+  return false;
+  }
+
+bool Session::sendPoses(uint64_t generation, uint64_t revision, const Poses& poses) {
+#ifndef _WIN32
+  auto& self = *impl;
+  if(self.state.role!=Role::Host || revision!=std::max(self.state.snapshotRevision,self.state.posesSent)+1 ||
+     poses.appliedInput!=self.state.inputApplied || poses.tick<self.state.poseTick) return false;
+  for(auto& peer:self.peers) {
+    if(peer->generation!=generation || peer->transfer!=Impl::Peer::Ready) continue;
+    if(!peer->output.enqueue({generation,PlayerIdentity::Companion,0,revision,poses})) return false;
+    self.state.posesSent = revision;
+    self.state.poseTick = poses.tick;
+    return true;
+    }
+#else
+  (void)generation; (void)revision; (void)poses;
+#endif
+  return false;
+  }
+
+std::optional<Message> Session::takePoses() {
+#ifndef _WIN32
+  if(impl->state.role!=Role::Guest) return {};
+  for(auto& peer:impl->peers) {
+    if(peer->poses.empty()) continue;
+    auto message = std::move(peer->poses.front());
+    peer->poses.pop_front();
+    return message;
+    }
+#endif
+  return {};
+  }
+
+bool Session::posesApplied(uint64_t generation, uint64_t revision) {
+#ifndef _WIN32
+  auto& self = *impl;
+  if(self.state.role!=Role::Guest || revision<=self.state.posesApplied || revision>self.state.posesReceived) return false;
+  for(auto& peer:self.peers) {
+    if(peer->generation!=generation || peer->transfer!=Impl::Peer::Ready) continue;
+    if(!peer->output.enqueue({generation,PlayerIdentity::Companion,0,revision,PoseAck{}})) return false;
+    self.state.posesApplied = revision;
+    return true;
+    }
+#else
+  (void)generation; (void)revision;
 #endif
   return false;
   }
