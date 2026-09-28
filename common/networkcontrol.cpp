@@ -6,6 +6,7 @@
 #include "world/world.h"
 #include "game/gamesession.h"
 #include "game/serialize.h"
+#include "utils/mouseutil.h"
 
 #include <Tempest/Application>
 #include <Tempest/Log>
@@ -95,6 +96,7 @@ void MainWindow::tickNetwork() {
     }
   auto& game = Gothic::inst();
   game.setNetworkPaused(status.role==Coop::Role::Host && status.boundPlayer!=0 && status.snapshotState!="ready");
+  tickNetworkInput();
   if(status.role==Coop::Role::Guest && !networkLoading && game.checkLoading()==Gothic::LoadState::Idle) {
     if(auto snapshot = network.takeSnapshot()) {
       networkLoading = true;
@@ -143,4 +145,81 @@ void MainWindow::finishNetworkLoad(bool success) {
   onWorldLoaded();
   loadStatus = "failed";
   network.invalidate("snapshot_load_failed");
+  }
+
+namespace {
+constexpr KeyCodec::Action networkActions[] = {
+  KeyCodec::Forward, KeyCodec::Back, KeyCodec::RotateL,
+  KeyCodec::RotateR, KeyCodec::Left, KeyCodec::Right
+  };
+}
+
+void MainWindow::networkKey(Tempest::KeyEvent& event, bool down) {
+  auto& game = Gothic::inst();
+  if(network.status().snapshotState!="ready" || game.checkLoading()!=Gothic::LoadState::Idle ||
+     game.localPlayerId()!=PlayerIdentity::Companion) return;
+  const auto action = keycodec.tr(event);
+  if(std::find(std::begin(networkActions),std::end(networkActions),action)==std::end(networkActions)) return;
+  if(down) networkKeys.insert(event.key); else networkKeys.erase(event.key);
+  uint32_t buttons = 0;
+  for(auto key:networkKeys) {
+    const Tempest::KeyEvent held(key);
+    for(size_t i=0; i<std::size(networkActions); ++i)
+      if(keycodec.tr(held)==networkActions[i]) buttons |= uint32_t(1)<<i;
+    }
+  if(buttons!=networkButtons) {
+    networkButtons = buttons;
+    sendNetworkInput();
+    }
+  event.accept();
+  }
+
+void MainWindow::sendNetworkInput(int x, int y) {
+  if(network.status().role!=Coop::Role::Guest || network.status().snapshotState!="ready") return;
+  const auto clamp = [](int value) { return int16_t(std::clamp(value,-int(Coop::MaxLookDelta),int(Coop::MaxLookDelta))); };
+  if(!network.sendInput({networkButtons,clamp(x),clamp(y)}))
+    network.invalidate("input_queue_full");
+  }
+
+void MainWindow::tickNetworkInput() {
+  auto& game = Gothic::inst();
+  const auto& status = network.status();
+  if(game.checkLoading()!=Gothic::LoadState::Idle) return;
+  if(networkControlGeneration!=status.generation) {
+    networkKeys.clear();
+    networkButtons = remoteButtons = 0;
+    if(status.role==Coop::Role::Host && game.world() && game.world()->playerById(PlayerIdentity::Companion))
+      controlForPlayer(PlayerIdentity::Companion).clearInput();
+    networkControlGeneration = status.generation;
+    }
+  if(status.role!=Coop::Role::Host || status.snapshotState!="ready" || !game.world()) return;
+  auto& control = controlForPlayer(PlayerIdentity::Companion);
+  float lookX = 0, lookY = 0;
+  while(auto message = network.takeInput()) {
+    const auto input = std::get<Coop::Input>(message->payload);
+    for(size_t i=0; i<std::size(networkActions); ++i) {
+      const auto bit = uint32_t(1)<<i;
+      if((input.buttons & bit)==(remoteButtons & bit)) continue;
+      if(input.buttons & bit)
+        control.onKeyPressed(networkActions[i],Tempest::Event::K_NoKey,KeyCodec::Mapping::Primary);
+      else
+        control.onKeyReleased(networkActions[i],KeyCodec::Mapping::Primary);
+      }
+    remoteButtons = input.buttons;
+    const float sensitivity = game.settingsGetF("GAME","mouseSensitivity")/MouseUtil::mouseSysSpeed();
+    const float x = -270.f*float(input.lookX)*sensitivity/float(std::max(w(),1));
+    float y = -270.f*float(input.lookY)*sensitivity/float(std::max(h(),1));
+    if(game.settingsGetI("GAME","camLookaroundInverse")) y = -y;
+    lookX += x;
+    lookY += y;
+    if(!network.inputApplied(message->generation,message->sequence,status.snapshotRevision)) {
+      control.clearInput();
+      remoteButtons = 0;
+      network.invalidate("input_ack_failed");
+      return;
+      }
+    }
+  // Bound the accumulated impulse per frame, including a burst of packets.
+  // The sender never supplies elapsed simulation time.
+  control.onRotateMouse(std::clamp(lookX,-36.f,36.f),std::clamp(lookY,-36.f,36.f));
   }

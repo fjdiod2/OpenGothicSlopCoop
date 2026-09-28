@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 3 (N08)
+# Co-op wire protocol, version 3 (N09)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -11,9 +11,9 @@ N04 adds the nonblocking TCP connection and compatibility handshake in
 [`session.cpp`](../common/network/session.cpp), with background fingerprints in
 [`fingerprint.cpp`](../common/network/fingerprint.cpp). Real engines can now
 connect on macOS loopback. N05 binds the host's saved companion to that connection.
-N07 makes the guest a presentation-only process; N08 transfers a host checkpoint, and N09
-routes input. The codec is shared engine source, not a separate mock protocol
-used only by tests.
+N07 makes the guest a presentation-only process; N08 transfers a host checkpoint,
+and N09 routes movement/turning input with ordered acknowledgements. The codec
+is shared engine source, not a separate mock protocol used only by tests.
 
 Version 3 adds snapshot begin/chunk/end/readiness messages. Older versions are
 rejected explicitly. Version 2 introduced `Accepted`, separating compatibility
@@ -126,12 +126,13 @@ revision tracking awaits N10. The guest requires the accepted generation,
 ID 2 and revision 1. A mismatched or repeated `Welcome` closes it with
 `invalid_binding`; one before `Accepted` fails the handshake. A guest sending
 `Welcome` to the host, or naming host/unknown player IDs after acceptance, is
-disconnected with `authority_violation`. Even input naming ID 2 is disabled and
-closes with `unexpected_message` until N09 input routing.
+disconnected with `authority_violation`. Input naming ID 2 before snapshot
+readiness closes with `unexpected_message`. After readiness the rules below apply.
 
 Binding does not create an actor in the guest world, switch its local camera or
-route its input. Snapshot activation selects its camera; input routing is N09. The host reports its binding when the
-Welcome is queued; the guest reports it only after validating the received frame.
+route its input. Snapshot activation selects its camera; input routing is enabled
+after readiness. The host reports its binding when the Welcome is queued; the
+guest reports it only after validating the received frame.
 This is assignment metadata, not a guest readiness acknowledgement.
 
 ### Initial snapshot and readiness barrier (N08)
@@ -161,7 +162,7 @@ announced total, checks SHA-256 after the complete end marker, then hands those
 bytes to the background checkpoint loader with immutable **Guest** authority.
 It selects local companion ID 2 while retaining canonical host `HERO`, then
 queues `SnapshotReady`. No campaign startup or guest save-file copy is involved.
-The host resumes on receipt. Input routing is still disabled until N09.
+The host resumes on receipt. N09 enables input only after this barrier.
 
 Transfer plus load has a 180-second deadline on each side, starting at send/begin.
 Disconnect, timeout or load failure discards transfer state and releases the host
@@ -203,8 +204,30 @@ All other bits must be zero. Both look deltas must be in `[-1000, 1000]`.
 The button mask replaces the previously held state; zero releases every button.
 Look deltas are applied once per accepted sequence. This is input intent, not
 position, elapsed simulation time, damage or a script command. The host determines
-simulation timing and gameplay effects. N09 will map these actions to controls;
-discrete interactions and inventory commands require a later extension.
+simulation timing and gameplay effects. N09 enables bits 0–5 through the guest's
+normal key mappings (including alternate keys). Jump/Walk remain reserved and
+are rejected by the session as `unsupported_input`; interactions, inventory and
+combat need later gameplay tasks. Walk is a toggle in the original controller,
+so it must not be incorrectly interpreted as a held modifier.
+
+Each changed held mask sends one sequence; relative mouse packets preserve the
+mask and apply their look once. Mouse uses raw pixels, host sensitivity/window
+size and a 36-degree total impulse cap per render frame. Guest camera look stays
+local. Host processing never uses client elapsed time or client positions.
+Only companion ID 2's controller receives these commands. Before readiness,
+during loading or after disconnect, guest controls cannot send gameplay input.
+Losing guest window focus sends a release; alternate keys for the same action
+are combined so releasing one does not cancel another still held.
+
+The host validates ID/generation and a contiguous sequence starting at 1 before
+placing input in its bounded 64-message application queue. Old-generation and
+duplicate/older-sequence packets are ignored and counted without changing held
+state, mouse impulse or the expected next sequence. A forward gap, wrong player,
+unsupported action or full queue closes the peer. The game thread drains inputs
+only with the host world available and snapshot ready, applies control changes,
+then queues acknowledgements. Disconnect/world replacement clears queued input;
+controller-held buttons and mouse impulses are released on generation loss.
+The full disconnect/save acceptance scenario remains N11–N13.
 
 ### StateAck
 
@@ -212,9 +235,12 @@ discrete interactions and inventory commands require a later extension.
 | --- | --- | --- |
 | 44 | 8 | Highest consecutively applied input sequence, or zero before any input |
 
-Reserved for later gameplay replication; not enabled by the N05 session.
-The header revision identifies the authoritative state after applying that
-input. This message carries a revision and acknowledgement only; it contains no
+N09 enables this after applying input to the assigned controller. The header
+revision is currently the snapshot baseline 1; advancing pose revisions are N10.
+This acknowledges control-state application, not a completed movement tick or
+committed save. The guest rejects acknowledgements for another generation/player,
+sequences it never sent, or decreasing sequence/revision. This message carries
+a revision and acknowledgement only; it contains no
 pose or world state and does not replicate either. N08 snapshots and N10 pose
 updates use separate messages.
 
@@ -235,8 +261,8 @@ layer, not by sending an unbound reject in the middle of gameplay.
 ## Session and ordering rules for the connection layer
 
 The codec validates structural constraints. The session enforces compatibility,
-direction/phase checks, admission, and companion assignment. Gameplay input,
-sequence tracking and advancing state revisions remain requirements for later tasks.
+direction/phase checks, admission, companion assignment, snapshot readiness and
+input sequence tracking. Advancing pose revisions are N10.
 
 1. An unbound connection accepts one `Hello`. The host either rejects it or
    returns one `Accepted`. Both sides verify compatibility; only then may the
@@ -259,7 +285,8 @@ sequence tracking and advancing state revisions remain requirements for later ta
    Old-generation input cannot mutate the current world. Do not wrap sequence
    counters; establish a new generation before exhaustion.
 5. Host revisions start at 1 and increase for authoritative state changes.
-   Repeated acknowledgements may have the same revision and applied-input value;
+   N09 retains the snapshot revision until N10. Repeated acknowledgements may
+   have the same revision and applied-input value;
    neither may decrease within a generation. An acknowledgement cannot refer to
    input the guest has not sent. Revisions are scoped by generation, and must not
    wrap. They do not promise that a save has committed to disk.
@@ -322,7 +349,11 @@ States include `disabled`, `fingerprinting`, `listening`,
 `fingerprint_error: ...`. Host state remains `connected` when refusing an extra
 guest; the reason/counter reports that separate event. `connected` means the
 compatibility handshake passed, even while waiting for binding. A bound guest
-owns companion ID 2 on the host; `snapshot_state == "ready"` reports snapshot
+owns companion ID 2 on the host. Input observations add `input_sent`,
+`input_received`, `input_applied`,
+`input_acknowledged`, `acknowledged_revision`, cumulative `input_duplicates` /
+`input_stale`, guest `held_buttons` and host `remote_buttons`. Sequence counters
+reset with the generation. `snapshot_state == "ready"` reports snapshot
 activation (guest) or receipt of that acknowledgement (host).
 
 ## Exact compatibility fingerprint inputs
@@ -421,11 +452,13 @@ checks an independent `Hello` vector, every split point and byte-at-a-time input
 combined frames, invalid headers/payloads, all truncated prefixes, bounded queues,
 blocked/partial writes, 10,000 ordered input messages under changing read/write
 boundaries and 10,000 deterministic mutated/truncated frames.
-On macOS, nine additional test cases exercise endpoint parsing, real loopback
+On macOS, eleven additional test cases exercise endpoint parsing, real loopback
 acceptance and reconnect, both directions of fingerprint validation, version
 rejection, second-guest rejection, deadlines, pending-socket limits, and the
-actual file/manifest hash implementation using temporary files. Binding tests
-cover host-only assignment, idempotence, reconnect/load invalidation, second-guest
+actual file/manifest hash implementation using temporary files. Input tests cover
+readiness, delivery/acknowledgement, duplicate and old-generation packets, gaps,
+wrong identities, reserved actions, application queue bounds and impossible acks.
+Binding tests cover host-only assignment, idempotence, reconnect/load invalidation, second-guest
 isolation, incorrect IDs/generations/revisions, early/duplicate Welcome frames,
 and forged guest assignments/inputs. The engine integration test additionally
 checks live and saved NPC reuse, separate inventory/HP/poses and script identity.
@@ -435,8 +468,8 @@ checks live and saved NPC reuse, separate inventory/HP/poses and script identity
 Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
 assets, start a GUI, or require initialized engine submodules. It runs 13 codec
-cases plus four object-registry cases everywhere, and nine connection/fingerprint
-cases on macOS (26 total); the latter use
+cases plus four object-registry cases everywhere, and eleven connection/fingerprint
+cases on macOS (28 total); the latter use
 loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh

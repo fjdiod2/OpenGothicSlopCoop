@@ -23,6 +23,7 @@
 #include <thread>
 #include <future>
 #include <atomic>
+#include <set>
 #include "network/session.h"
 
 #include "world/world.h"
@@ -113,6 +114,12 @@ class MainWindow : public Tempest::Window {
     uint64_t networkLoadGeneration = 0, networkLoadRevision = 0, networkSnapshotTick = 0;
     std::string networkSnapshotArtifact;
     void finishNetworkLoad(bool success);
+    void networkKey(Tempest::KeyEvent& event, bool down);
+    void sendNetworkInput(int x=0, int y=0);
+    void tickNetworkInput();
+    std::set<Tempest::Event::KeyType> networkKeys;
+    uint32_t networkButtons = 0, remoteButtons = 0;
+    uint64_t networkControlGeneration = 0;
 
     // Local, opt-in development interface; all commands run on the game thread.
     void initTestControl();

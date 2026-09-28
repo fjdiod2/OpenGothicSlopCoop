@@ -97,6 +97,8 @@ struct Session::Impl {
     Bytes snapshot;
     uint64_t revision = 0, total = 0, offset = 0, deadline = 0;
     Fingerprint digest = {};
+    uint64_t receivedInput = 0, appliedInput = 0;
+    std::deque<Message> inputs;
     explicit Peer(int fd, uint64_t now):socket(fd),started(now) {}
     };
   std::unique_ptr<Socket> listener;
@@ -106,6 +108,8 @@ struct Session::Impl {
     state.snapshotState = "none";
     state.snapshotRevision = state.snapshotBytes = state.snapshotTransferred = 0;
     state.snapshotDigest = {};
+    state.inputSent = state.inputReceived = state.inputApplied = state.inputAcknowledged = 0;
+    state.acknowledgedRevision = 0;
     }
 
   void event(const std::string& reason) {
@@ -150,6 +154,34 @@ struct Session::Impl {
 
   bool receiveMessage(Peer& peer, const Message& message, uint64_t now) {
     const auto type = messageType(message);
+    if(peer.stage==Peer::Connected && peer.bound && peer.transfer==Peer::Ready &&
+       state.role==Role::Host && type==MessageType::Input) {
+      if(message.player!=PlayerIdentity::Companion) { event("authority_violation"); return false; }
+      if(message.generation!=peer.generation) { ++state.inputStale; return true; }
+      if(message.sequence<=peer.receivedInput) { ++state.inputDuplicates; return true; }
+      if(peer.receivedInput==std::numeric_limits<uint64_t>::max() || message.sequence!=peer.receivedInput+1) {
+        event("input_sequence_gap"); return false;
+        }
+      if((std::get<Input>(message.payload).buttons & ~uint32_t(0x3f))!=0) {
+        event("unsupported_input"); return false;
+        }
+      if(peer.inputs.size()>=64) { event("input_queue_full"); return false; }
+      peer.inputs.push_back(message);
+      peer.receivedInput = state.inputReceived = message.sequence;
+      return true;
+      }
+    if(peer.stage==Peer::Connected && peer.transfer==Peer::Ready &&
+       state.role==Role::Guest && type==MessageType::StateAck) {
+      const auto sequence = std::get<StateAck>(message.payload).appliedInput;
+      if(message.generation!=peer.generation || message.player!=PlayerIdentity::Companion ||
+         sequence<state.inputAcknowledged || sequence>state.inputSent ||
+         message.revision<state.acknowledgedRevision) {
+        event("invalid_input_ack"); return false;
+        }
+      state.inputAcknowledged = sequence;
+      state.acknowledgedRevision = message.revision;
+      return true;
+      }
     if(type==MessageType::SnapshotBegin || type==MessageType::SnapshotChunk ||
        type==MessageType::SnapshotEnd || type==MessageType::SnapshotReady) {
       if(peer.stage!=Peer::Connected || !peer.bound || message.generation!=peer.generation ||
@@ -448,6 +480,52 @@ bool Session::snapshotLoaded(uint64_t generation, uint64_t revision) {
     }
 #else
   (void)generation; (void)revision;
+#endif
+  return false;
+  }
+
+bool Session::sendInput(Input input) {
+#ifndef _WIN32
+  auto& self = *impl;
+  if(self.state.role!=Role::Guest || self.state.inputSent==std::numeric_limits<uint64_t>::max()) return false;
+  for(auto& peer:self.peers) {
+    if(peer->stage!=Impl::Peer::Connected || peer->transfer!=Impl::Peer::Ready) continue;
+    const auto sequence = self.state.inputSent+1;
+    if(!peer->output.enqueue({peer->generation,PlayerIdentity::Companion,sequence,0,input})) return false;
+    self.state.inputSent = sequence;
+    return true;
+    }
+#else
+  (void)input;
+#endif
+  return false;
+  }
+
+std::optional<Message> Session::takeInput() {
+#ifndef _WIN32
+  if(impl->state.role!=Role::Host) return {};
+  for(auto& peer:impl->peers) {
+    if(peer->inputs.empty()) continue;
+    auto message = std::move(peer->inputs.front());
+    peer->inputs.pop_front();
+    return message;
+    }
+#endif
+  return {};
+  }
+
+bool Session::inputApplied(uint64_t generation, uint64_t sequence, uint64_t revision) {
+#ifndef _WIN32
+  if(impl->state.role!=Role::Host) return false;
+  for(auto& peer:impl->peers) {
+    if(peer->generation!=generation || peer->transfer!=Impl::Peer::Ready ||
+       sequence!=peer->appliedInput+1 || sequence>peer->receivedInput) continue;
+    if(!peer->output.enqueue({generation,PlayerIdentity::Companion,0,revision,StateAck{sequence}})) return false;
+    peer->appliedInput = impl->state.inputApplied = sequence;
+    return true;
+    }
+#else
+  (void)generation; (void)sequence; (void)revision;
 #endif
   return false;
   }

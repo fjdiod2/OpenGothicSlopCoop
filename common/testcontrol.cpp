@@ -96,6 +96,15 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("snapshot_tick"); out.Uint64(networkSnapshotTick);
   out.Key("snapshot_artifact"); str(networkSnapshotArtifact);
   out.Key("paused"); out.Bool(game.isNetworkPaused());
+  out.Key("input_sent"); out.Uint64(net.inputSent);
+  out.Key("input_received"); out.Uint64(net.inputReceived);
+  out.Key("input_applied"); out.Uint64(net.inputApplied);
+  out.Key("input_acknowledged"); out.Uint64(net.inputAcknowledged);
+  out.Key("input_duplicates"); out.Uint64(net.inputDuplicates);
+  out.Key("input_stale"); out.Uint64(net.inputStale);
+  out.Key("acknowledged_revision"); out.Uint64(net.acknowledgedRevision);
+  out.Key("held_buttons"); out.Uint(networkButtons);
+  out.Key("remote_buttons"); out.Uint(remoteButtons);
   out.Key("bindings"); out.Uint64(net.bindings);
   out.Key("peers"); out.Uint64(net.peers);
   out.Key("accepted"); out.Uint64(net.accepted);

@@ -400,7 +400,10 @@ void MainWindow::tickMouse(uint64_t dt) {
 
   camera->onRotateMouse(PointF(dpScaled.y,-dpScaled.x));
   if(!inventory.isActive()) {
-    player.onRotateMouse(-dpScaled.x, -dpScaled.y);
+    if(Gothic::inst().isGuest())
+      sendNetworkInput(dMouse.x,dMouse.y);
+    else
+      player.onRotateMouse(-dpScaled.x, -dpScaled.y);
     }
 
   dMouse = Point();
@@ -421,7 +424,8 @@ void MainWindow::mouseWheelEvent(MouseEvent &event) {
   }
 
 void MainWindow::keyDownEvent(KeyEvent &event) {
-  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
+  if(Gothic::inst().isGuest()) { networkKey(event,true); return; }
+  if(Gothic::inst().isNetworkPaused()) return;
   if(video.isActive()){
     event.accept();
     video.keyDownEvent(event);
@@ -519,7 +523,8 @@ void MainWindow::keyRepeatEvent(KeyEvent& event) {
   }
 
 void MainWindow::keyUpEvent(KeyEvent &event) {
-  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
+  if(Gothic::inst().isGuest()) { networkKey(event,false); return; }
+  if(Gothic::inst().isNetworkPaused()) return;
   if(uiKeyUp==&video){
     video.keyUpEvent(event);
     if(event.isAccepted())
@@ -583,8 +588,17 @@ void MainWindow::keyUpEvent(KeyEvent &event) {
   }
 
 void MainWindow::focusEvent(FocusEvent &event) {
-  if(!event.in)
+  if(!event.in) {
+    player.clearInput();
+    if(Gothic::inst().isGuest()) {
+      networkKeys.clear();
+      if(networkButtons!=0) {
+        networkButtons = 0;
+        sendNetworkInput();
+        }
+      }
     return;
+    }
   dMouse = Point();
 
   if(SystemApi::isFullscreen(hwnd()))
@@ -1300,6 +1314,12 @@ void MainWindow::setGameImpl(std::unique_ptr<GameSession> &&w) {
   }
 
 void MainWindow::clearInput() {
+  networkKeys.clear();
+  if(networkButtons!=0) {
+    networkButtons = 0;
+    sendNetworkInput();
+    }
+  remoteButtons = 0;
   player.clearInput();
   for(auto& entry:otherPlayers)
     entry.second->clearInput();

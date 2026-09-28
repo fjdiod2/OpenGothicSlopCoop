@@ -1,4 +1,4 @@
-# Guest authority (N07–N08)
+# Guest authority (N07–N09)
 
 The campaign is simulated and saved by the host. `-coop-join 127.0.0.1:PORT`
 selects guest mode for the process, including before a world exists and after
@@ -47,9 +47,10 @@ effect ticks. Gameplay animation events and root-motion integration remain in
 the authoritative NPC tick.
 
 The main window keeps rendering and camera mouse/zoom handling active. It skips
-dialogue, inventory and player simulation. Gameplay keys, explicit nonlocal
-controllers, Marvin commands and mutating UI shortcuts are blocked. Until N09,
-guest keys are discarded; they are not sent to the host. Until N10, the guest
+dialogue, inventory and player simulation. Explicit nonlocal
+controllers, Marvin commands and mutating UI shortcuts are blocked. N09 routes
+normal movement/turning keys and mouse intent to the assigned host controller
+after snapshot readiness; guest input never drives local gameplay. Until N10, the guest
 plays the saved pose animation without receiving new host poses.
 
 Additional authority checks protect damage/attribute changes, pickup/use,
@@ -92,7 +93,7 @@ host. Disconnect must leave the guest equally read-only. Diagnostic archives
 are not loadable guest checkpoints.
 
 This verifies the fixture and the engine's current runtime entry points. Full
-campaign event replication, dialogue ownership, input routing, joint region
+campaign event replication, dialogue ownership and joint region
 travel remain later tasks. Screenshots, detailed
 states, per-entry hashes, logs and cleanup evidence are retained by the runner;
 the parent `TESTING.md` records completed runs.

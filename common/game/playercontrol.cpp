@@ -470,6 +470,7 @@ bool PlayerControl::canInteract() const {
   }
 
 void PlayerControl::clearInput() {
+  rotMouse = rotMouseY = 0;
   movement.reset();
   std::memset(ctrl, 0,sizeof(ctrl));
   std::memset(actrl,0,sizeof(actrl));

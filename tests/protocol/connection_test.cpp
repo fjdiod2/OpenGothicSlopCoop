@@ -253,8 +253,7 @@ void timeout() {
   REQUIRE(host.status().state=="listening");
   Socket silent;
   silent.connect(host.status().port);
-  host.tick(1);
-  REQUIRE(host.status().peers==1);
+  pump(host,guest,[&] { return host.status().peers==1; });
   host.tick(1+Session::HandshakeTimeoutMs);
   REQUIRE(host.status().state=="listening" && host.status().timeouts==1);
   REQUIRE(host.status().peers==0 && host.status().reason=="timeout");
@@ -373,6 +372,102 @@ void snapshotFailures() {
   REQUIRE(!guest.snapshotLoaded(generation,1));
   }
 
+void inputRoundtrip() {
+  Session host, guest;
+  host.start({Role::Host,0},identity(),0);
+  guest.start({Role::Guest,host.status().port},identity(),0);
+  REQUIRE(!guest.sendInput({Forward,0,0}));
+  pump(host,guest,[&] { return host.status().state=="connected"; });
+  const auto generation = host.status().generation;
+  REQUIRE(host.bindCompanion(generation));
+  REQUIRE(!guest.sendInput({Forward,0,0}));
+  REQUIRE(host.sendSnapshot(generation,1,Bytes{1,2,3}));
+  pump(host,guest,[&] { return guest.status().snapshotState=="received"; });
+  REQUIRE(guest.takeSnapshot());
+  REQUIRE(guest.snapshotLoaded(generation,1));
+  pump(host,guest,[&] { return host.status().snapshotState=="ready"; });
+  for(auto input:{Input{Forward,0,0},Input{TurnRight,10,-20},Input{0,0,0}})
+    REQUIRE(guest.sendInput(input));
+  pump(host,guest,[&] { return host.status().inputReceived==3; });
+  REQUIRE(host.status().inputApplied==0 && guest.status().inputAcknowledged==0);
+  REQUIRE(!host.inputApplied(generation,2,1));
+  for(uint64_t sequence=1; sequence<=3; ++sequence) {
+    auto message = host.takeInput();
+    REQUIRE(message && message->generation==generation && message->player==2 && message->sequence==sequence);
+    REQUIRE(host.inputApplied(generation,sequence,1));
+    REQUIRE(!host.inputApplied(generation,sequence,1));
+    }
+  REQUIRE(!host.takeInput());
+  pump(host,guest,[&] { return guest.status().inputAcknowledged==3; });
+  REQUIRE(guest.status().acknowledgedRevision==1);
+  host.invalidate("test_input_reset");
+  REQUIRE(!host.takeInput() && host.status().inputApplied==0);
+  }
+
+void inputValidation() {
+  Session host, idle;
+  host.start({Role::Host,0},identity(),0);
+  auto ready = [&](Socket& peer) {
+    peer.connect(host.status().port);
+    sendMessage(peer,{0,0,0,0,identity()});
+    pump(host,idle,[&] { return host.status().state=="connected"; });
+    const auto gen = host.status().generation;
+    REQUIRE(host.bindCompanion(gen));
+    REQUIRE(host.sendSnapshot(gen,1,Bytes{1}));
+    pump(host,idle,[&] { return host.status().snapshotState=="awaiting_ready"; });
+    sendMessage(peer,{gen,2,0,1,SnapshotReady{}});
+    pump(host,idle,[&] { return host.status().snapshotState=="ready"; });
+    return gen;
+    };
+  Socket peer;
+  const auto gen = ready(peer);
+  sendMessage(peer,{gen,2,1,0,Input{0,25,0}});
+  pump(host,idle,[&] { return host.status().inputReceived==1; });
+  REQUIRE(host.takeInput());
+  REQUIRE(host.inputApplied(gen,1,1));
+  sendMessage(peer,{gen,2,1,0,Input{Forward,1000,0}});
+  sendMessage(peer,{gen+1,2,2,0,Input{Forward,1000,0}});
+  pump(host,idle,[&] { return host.status().inputDuplicates==1 && host.status().inputStale==1; });
+  REQUIRE(!host.takeInput() && host.status().inputApplied==1);
+  sendMessage(peer,{gen,2,2,0,Input{0,0,0}});
+  pump(host,idle,[&] { return host.status().inputReceived==2; });
+  REQUIRE(host.takeInput());
+  REQUIRE(host.inputApplied(gen,2,1));
+  sendMessage(peer,{gen,2,4,0,Input{Forward,0,0}});
+  pump(host,idle,[&] { return host.status().state=="listening"; });
+  REQUIRE(host.status().reason=="input_sequence_gap");
+  for(int fault=0; fault<3; ++fault) {
+    Socket invalid;
+    const auto generation = ready(invalid);
+    if(fault==0) sendMessage(invalid,{generation,1,1,0,Input{Forward,0,0}});
+    if(fault==1) sendMessage(invalid,{generation,2,1,0,Input{Jump,0,0}});
+    if(fault==2)
+      for(uint64_t i=1; i<=65; ++i) sendMessage(invalid,{generation,2,i,0,Input{Forward,0,0}});
+    pump(host,idle,[&] { return host.status().state=="listening"; });
+    REQUIRE(host.status().reason==(fault==0 ? "authority_violation" : fault==1 ? "unsupported_input" : "input_queue_full"));
+    REQUIRE(!host.takeInput());
+    }
+  // A host cannot acknowledge input the guest never sent.
+  Socket server;
+  Session guest;
+  guest.start({Role::Guest,server.listen()},identity(),0);
+  guest.tick(1);
+  Socket accepted;
+  ::close(accepted.fd);
+  accepted.fd = ::accept(server.fd,nullptr,nullptr);
+  REQUIRE(accepted.fd>=0);
+  sendMessage(accepted,{12,0,0,0,Accepted{identity()}});
+  sendMessage(accepted,{12,2,0,1,Welcome{}});
+  sendMessage(accepted,{12,2,0,1,SnapshotBegin{1,hashBytes(Bytes{7})}});
+  sendMessage(accepted,{12,2,0,1,SnapshotChunk{0,Bytes{7}}});
+  sendMessage(accepted,{12,2,0,1,SnapshotEnd{}});
+  pump(idle,guest,[&] { return guest.status().snapshotState=="received"; });
+  REQUIRE(guest.takeSnapshot() && guest.snapshotLoaded(12,1));
+  sendMessage(accepted,{12,2,0,1,StateAck{1}});
+  pump(idle,guest,[&] { return guest.status().state=="disconnected"; });
+  REQUIRE(guest.status().reason=="invalid_input_ack");
+  }
+
 struct Fixture {
   std::filesystem::path root = std::filesystem::temp_directory_path()/
     ("gothic-fingerprint-"+std::to_string(getpid()));
@@ -451,6 +546,8 @@ int main(int argc, char** argv) {
     else if(name=="binding-authority") bindingAuthority();
     else if(name=="snapshot-roundtrip") snapshotRoundtrip();
     else if(name=="snapshot-failures") snapshotFailures();
+    else if(name=="input-roundtrip") inputRoundtrip();
+    else if(name=="input-validation") inputValidation();
     else throw std::runtime_error("Unknown connection test");
     std::cout << "PASS: " << name << '\n';
     return 0;
