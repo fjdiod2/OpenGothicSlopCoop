@@ -4,6 +4,7 @@
 #include "marvin.h"
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
+#include "network/fingerprint.h"
 
 #include <Tempest/Application>
 #include <Tempest/Log>
@@ -69,6 +70,23 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("menu"); out.Bool(rootMenu.isActive());
   out.Key("chapter"); out.Bool(chapter.isActive());
   out.Key("inventory"); out.Bool(inventory.isActive());
+  const auto& net = network.status();
+  out.Key("network"); out.StartObject();
+  out.Key("role"); str(CommandLine::inst().coopEndpoint().role==Coop::Role::Host ? "host" :
+                       CommandLine::inst().coopEndpoint().role==Coop::Role::Guest ? "guest" : "disabled");
+  out.Key("state"); str(networkPreparation.empty() ? net.state : networkPreparation);
+  out.Key("reason"); str(net.reason);
+  out.Key("port"); out.Uint(net.port);
+  out.Key("protocol"); out.Uint(Coop::ProtocolVersion);
+  out.Key("generation"); out.Uint64(net.generation);
+  out.Key("peers"); out.Uint64(net.peers);
+  out.Key("accepted"); out.Uint64(net.accepted);
+  out.Key("rejected"); out.Uint64(net.rejected);
+  out.Key("timeouts"); out.Uint64(net.timeouts);
+  out.Key("disconnected"); out.Uint64(net.disconnected);
+  out.Key("engine_fingerprint"); str(Coop::hexFingerprint(networkIdentity.engine));
+  out.Key("data_fingerprint"); str(Coop::hexFingerprint(networkIdentity.gameData));
+  out.EndObject();
   if(world) {
     out.Key("world"); str(world->name());
     out.Key("tick"); out.Uint64(world->tickCount());

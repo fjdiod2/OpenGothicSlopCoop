@@ -41,7 +41,7 @@ Message input(uint64_t sequence=9) {
 
 // Independent literal from docs/coop-protocol.md, not constructed by the codec.
 Bytes goldenInput() {
-  return hex("4f4743500000003400010003"
+  return hex("4f4743500000003400020003"
              "0102030405060708" "0000000000000002"
              "0000000000000009" "0000000000000000"
              "00000081fffb0064");
@@ -56,6 +56,7 @@ std::vector<Message> examples() {
   constexpr auto maximum = std::numeric_limits<uint64_t>::max();
   return {
     {0,0,0,0,hello},
+    {maximum,0,0,0,Accepted{hello}},
     {maximum,2,0,maximum,Welcome{}},
     input(),
     {maximum,maximum,maximum,0,Input{KnownButtons,-1000,1000}},
@@ -109,7 +110,7 @@ void messageTypes() {
     }
   // A second literal covers the variable fingerprints and byte order of a
   // different message type, so matching encode/decode bugs cannot hide it.
-  const auto hello = hex("4f4743500000006c00010001"
+  const auto hello = hex("4f4743500000006c00020001"
                          "00000000000000000000000000000000"
                          "00000000000000000000000000000000"
                          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -206,7 +207,8 @@ void malformedHeader() {
       const size_t offset = 12+field*8;
       bytes = encode(message);
       std::fill_n(bytes.begin()+std::ptrdiff_t(offset),8,uint8_t(0));
-      const bool needsZero = unbound || (isInput ? field==3 : field==2);
+      const bool needsZero = unbound || (std::holds_alternative<Accepted>(message.payload) ? field!=0 :
+                                        isInput ? field==3 : field==2);
       if(needsZero)
         bytes[offset+7] = 1;
       bytes.resize(HeaderBytes);

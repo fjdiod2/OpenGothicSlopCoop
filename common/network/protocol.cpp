@@ -36,6 +36,7 @@ int16_t getSigned(std::span<const uint8_t> bytes, size_t offset) {
 size_t bodySize(MessageType type) {
   switch(type) {
     case MessageType::Hello:    return 64;
+    case MessageType::Accepted: return 64;
     case MessageType::Welcome:  return 0;
     case MessageType::Input:    return 8;
     case MessageType::StateAck: return 8;
@@ -57,6 +58,9 @@ void validateHeader(const Message& message, MessageType type) {
       break;
     case MessageType::Input:
       valid = message.generation!=0 && message.player!=0 && message.sequence!=0 && message.revision==0;
+      break;
+    case MessageType::Accepted:
+      valid = message.generation!=0 && message.player==0 && message.sequence==0 && message.revision==0;
       break;
     }
   if(!valid)
@@ -110,6 +114,7 @@ Message readHeader(std::span<const uint8_t> bytes) {
     case MessageType::Input:    message.payload = Input{};    break;
     case MessageType::StateAck: message.payload = StateAck{}; break;
     case MessageType::Reject:   message.payload = Reject{};   break;
+    case MessageType::Accepted: message.payload = Accepted{}; break;
     }
   return message;
   }
@@ -117,8 +122,10 @@ Message readHeader(std::span<const uint8_t> bytes) {
 Message decode(std::span<const uint8_t> bytes) {
   auto message = readHeader(bytes);
   switch(messageType(message)) {
-    case MessageType::Hello: {
-      auto& hello = std::get<Hello>(message.payload);
+    case MessageType::Hello:
+    case MessageType::Accepted: {
+      auto& hello = std::holds_alternative<Hello>(message.payload) ? std::get<Hello>(message.payload) :
+                                                                   std::get<Accepted>(message.payload).identity;
       std::copy_n(bytes.begin()+HeaderBytes,32,hello.engine.begin());
       std::copy_n(bytes.begin()+HeaderBytes+32,32,hello.gameData.begin());
       break;
@@ -151,6 +158,7 @@ MessageType messageType(const Message& message) {
   if(std::holds_alternative<Input>(message.payload))    return MessageType::Input;
   if(std::holds_alternative<StateAck>(message.payload)) return MessageType::StateAck;
   if(std::holds_alternative<Reject>(message.payload))   return MessageType::Reject;
+  if(std::holds_alternative<Accepted>(message.payload)) return MessageType::Accepted;
   invalid(ProtocolErrorCode::Type,"Missing co-op payload");
   }
 
@@ -169,8 +177,10 @@ Bytes encode(const Message& message) {
   put(bytes,message.sequence,8);
   put(bytes,message.revision,8);
   switch(type) {
-    case MessageType::Hello: {
-      const auto& hello = std::get<Hello>(message.payload);
+    case MessageType::Hello:
+    case MessageType::Accepted: {
+      const auto& hello = std::holds_alternative<Hello>(message.payload) ? std::get<Hello>(message.payload) :
+                                                                         std::get<Accepted>(message.payload).identity;
       bytes.insert(bytes.end(),hello.engine.begin(),hello.engine.end());
       bytes.insert(bytes.end(),hello.gameData.begin(),hello.gameData.end());
       break;

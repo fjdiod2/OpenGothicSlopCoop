@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 1 (N03)
+# Co-op wire protocol, version 2 (N04)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -6,11 +6,16 @@ This document specifies the asset-independent codec in
 reliable ordered TCP byte stream. One TCP read need not contain one frame: a
 frame may span reads, and a read may contain several frames.
 
-N03 implements encoding, incremental decoding and a bounded outbound queue.
-There are no sockets, listening ports, connected engines or replicated gameplay
-yet. N04 adds connection handling and handshake validation; N05 binds a guest
-to a saved companion; N09 enforces input authority and sequence rules. The codec
-is shared engine source, not a separate mock protocol used only by tests.
+N03 implemented encoding, incremental decoding and a bounded outbound queue.
+N04 adds the nonblocking TCP connection and compatibility handshake in
+[`session.cpp`](../common/network/session.cpp), with background fingerprints in
+[`fingerprint.cpp`](../common/network/fingerprint.cpp). Real engines can now
+connect on macOS loopback. They still simulate independent worlds: N05 binds a
+saved companion, N08 transfers state, and N09 routes input. The codec is shared
+engine source, not a separate mock protocol used only by tests.
+
+Version 2 adds `Accepted` so compatibility acceptance does not prematurely claim
+that a character has been assigned. Version-1 peers are rejected explicitly.
 
 ## Encoding and frame header
 
@@ -25,10 +30,10 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `1` |
+| 8 | 2 | Version | Exactly `2` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
-| 12 | 8 | Generation | Host-issued session/world generation; zero before binding |
-| 20 | 8 | Player | Persistent actor ID assigned by the host; zero before binding |
+| 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
+| 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
 | 28 | 8 | Input sequence | Nonzero only in `Input` |
 | 36 | 8 | State revision | Nonzero only in `Welcome` and `StateAck` |
 
@@ -37,7 +42,7 @@ message also has an **exact** length; the global maximum does not permit padding
 extra fields or an arbitrary payload. The decoder checks the prefix after eight
 bytes and validates the complete header before buffering the body. The largest
 current frame is 108 bytes. The larger cap leaves room for future bounded
-snapshot chunks; snapshot messages are not defined in version 1.
+snapshot chunks; snapshot messages are not defined in version 2.
 
 ## Message definitions
 
@@ -48,6 +53,7 @@ snapshot chunks; snapshot messages are not defined in version 1.
 | 3 | `Input` | Guest → host | 52 | `nonzero / nonzero / nonzero / 0` |
 | 4 | `StateAck` | Host → guest | 52 | `nonzero / nonzero / 0 / nonzero` |
 | 5 | `Reject` | Host → guest | 46 | `0 / 0 / 0 / 0` |
+| 6 | `Accepted` | Host → guest | 108 | `nonzero / 0 / 0 / 0` |
 
 ### Hello
 
@@ -56,14 +62,26 @@ snapshot chunks; snapshot messages are not defined in version 1.
 | 44 | 32 | Engine compatibility fingerprint |
 | 76 | 32 | Game-data/mod compatibility fingerprint |
 
-The guest sends this first. These fixed-size fields reserve SHA-256 fingerprints
-for the engine build and game-data/mod configuration. N04 must define exactly
-which inputs are hashed and compare them; N03 treats them as opaque bytes and
-does not establish compatibility from their presence alone. No player identity
-is requested by this message.
+The guest sends this first. These fields contain the actual SHA-256 fingerprints
+described below. The host compares both before accepting the connection. No
+player identity is requested by this message.
+
+### Accepted
+
+The body has the same layout as `Hello`, containing the host's fingerprints. The
+guest verifies both before marking the connection accepted. The nonzero header
+generation is host-issued; player, sequence and revision remain zero. N04 allows
+one accepted guest, but creates no NPC and grants no gameplay authority.
+
+The current session implementation accepts only `Hello` on the host and
+`Accepted`/`Reject` on the guest during the handshake. All further application
+messages are disabled in N04; receiving one closes that peer with an observable
+reason. An accepted connection remains open until disconnect/error. There is no
+heartbeat or idle timeout after acceptance yet.
 
 ### Welcome
 
+Reserved for actor binding in N05; not sent or accepted by the N04 session.
 No body. The host supplies the generation, assigned persistent player identity
 and current authoritative revision in the header. It is the only message that
 establishes a binding. It does not mean that the guest has loaded a world or may
@@ -107,6 +125,7 @@ discrete interactions and inventory commands require a later extension.
 | --- | --- | --- |
 | 44 | 8 | Highest consecutively applied input sequence, or zero before any input |
 
+Reserved for later gameplay replication; not enabled by the N04 session.
 The header revision identifies the authoritative state after applying that
 input. This message carries a revision and acknowledgement only; it contains no
 pose or world state and does not replicate either. N08/N10 will define snapshots
@@ -122,22 +141,24 @@ Reasons: `1` protocol version, `2` engine fingerprint, `3` game-data fingerprint
 `4` host full, `5` invalid session/handshake. Any other value is malformed. No
 arbitrary error string crosses the wire. A reject is a terminal handshake reply,
 followed by closing the connection. On an undecodable/unsupported peer version,
-closing without a reply is also valid; a peer might not understand a version-1
+closing without a reply is also valid; a peer might not understand a version-2
 reject. Runtime connection failure and stale input are handled by the session
 layer, not by sending an unbound reject in the middle of gameplay.
 
 ## Session and ordering rules for the connection layer
 
-These rules specify how later tasks must use the fields. N03 validates their
-structural constraints, but does **not** implement a handshake state machine,
-direction checks, authority, sequence tracking or gameplay acceptance.
+The codec validates structural constraints. N04 enforces the compatibility
+handshake, direction/phase checks and admission limit. Actor authority, input
+sequence tracking and state revisions below remain requirements for later tasks.
 
 1. An unbound connection accepts one `Hello`. The host either rejects it or
-   returns one `Welcome`. Reject unexpected message types for the connection's
-   direction and phase. Do not accept `Input` merely because it decodes.
-2. The host issues a fresh nonzero generation for a binding/world epoch. Change
-   it on reconnect, checkpoint load or world replacement before accepting more
-   input. Never reuse a previous generation for a new binding. Generation is a
+   returns one `Accepted`. Both sides verify compatibility; only then may later
+   tasks add a `Welcome` binding and world readiness. Unexpected message types
+   for the direction/phase close the peer. A valid `Input` cannot bypass this.
+2. The host issues a fresh nonzero generation for each accepted connection,
+   using a random 64-bit seed and increasing counter; counter wrap is refused.
+   Reconnect changes it. N05/N08 must also invalidate it on checkpoint load or
+   world replacement before enabling gameplay input. Generation is a
    stale-session fence, not authentication; a player ID is not a credential.
 3. After binding and world readiness, every input must match that connection's
    generation and assigned player. A guest cannot retarget an input to host ID 1
@@ -157,9 +178,92 @@ direction checks, authority, sequence tracking or gameplay acceptance.
    cannot keep running. Reconnect requires fresh binding/readiness and resets
    sequence tracking, while preserving the saved companion's identity/state.
 
-Actual freshness generation, compatibility fingerprints, connection deadlines,
-read/write budgets per tick, handshake enforcement and authority tests belong to
-N04/N05/N09. This codec makes no internet-security or campaign-correctness claim.
+N04's generation is a connection epoch; save/load does not yet establish a
+replicated world epoch. Gameplay authority tests remain N05/N09. Passing the
+handshake does not establish campaign correctness.
+
+## Starting and observing a connection (N04)
+
+Pass exactly one of these explicit startup options:
+
+```text
+-coop-host PORT
+-coop-join 127.0.0.1:PORT
+```
+
+Host ports are `0..65535`; zero requests an OS-assigned free port. Guest ports
+are `1..65535`. The host binds only IPv4 `127.0.0.1`; the guest accepts that exact
+address, with no DNS resolution or other interfaces. Duplicate/conflicting
+options, missing values and malformed endpoints fail command-line validation.
+Without either option, no fingerprint scan or network socket is started.
+
+The macOS implementation is tested. Fingerprinting currently uses CommonCrypto
+and macOS executable discovery; other platforms report unsupported preparation
+instead of accepting an unchecked peer. Porting fingerprint support is separate
+work. POSIX transport code is isolated from the engine/renderer.
+
+Fingerprinting runs once in a cancellable background job. Sockets start after it
+succeeds; preparation failure leaves the game running and reports the error.
+Socket operations are nonblocking, including connect (zero-timeout readiness
+poll plus `SO_ERROR`). Each peer gets at most four 4-KiB reads and four writes per
+render tick; at most four accepts are attempted. There are at most four sockets
+including accepted and pending peers. Excess pending peers are closed and
+reported as `pending_limit`. An ordinary second guest receives `Reject(Full)`
+without replacing the accepted guest.
+
+The five-second deadline covers connect plus handshake, measured from socket
+creation/acceptance, and is checked every network tick. A rejected peer has a
+bounded five-second drain window before closure. Silent or partial-handshake
+peers are closed on timeout; the host listener and game remain active. EOF/reset
+releases admission so a fresh guest can connect. Failed guests do not reconnect
+automatically. Socket errors cannot raise SIGPIPE and terminate the engine.
+
+State transitions and reasons appear in `log.txt` as `Coop: ...`. Development
+`state` replies expose `network`: role, state, reason, bound port, protocol,
+generation, live peer count, acceptance/rejection/timeout/disconnect counters and
+both fingerprints. States include `disabled`, `fingerprinting`, `listening`,
+`connecting`, `handshaking`, `connected`, `rejected`, `failed`, `disconnected`, or
+`fingerprint_error: ...`. Host state remains `connected` when refusing an extra
+guest; the reason/counter reports that separate event. A connection alone does
+not change the local camera, player roster, save file or script `HERO`.
+
+## Exact compatibility fingerprint inputs
+
+The engine fingerprint is SHA-256 of the running executable's file bytes,
+located through the platform executable API rather than a caller-supplied
+version string. This deliberately requires identical binaries, including dirty
+builds, architecture and build mode; cross-build compatibility is not negotiated.
+
+The game-data fingerprint is SHA-256 of a canonical manifest. Every integer in
+the manifest is unsigned 64-bit big-endian; every text field is its byte length
+followed by its UTF-8 bytes. Digests are 32 raw bytes. Append in this order:
+
+1. Text `OpenGothic-data-manifest-v1`.
+2. Settings count, then these text fields in order: `game=N` (detected game),
+   `patch=N` (detected patch), `language=N` (`[GAME] language`), and
+   `mod=FILENAME` (selected mod INI basename, empty if none).
+3. Successful mounted-archive count, then each archive's path relative to the
+   installation's Data directory, in the actual engine mount order. This records
+   override order and failed/omitted mounts as well as configuration.
+4. File-entry count, then each entry's logical name and content SHA-256. Entries
+   are sorted by logical name. Names are `Data/RELATIVE_PATH`, `_work/RELATIVE_PATH`
+   and, when selected, `selected-mod` for the mod INI. Paths use `/`, with original
+   case preserved. Absolute installation paths are excluded.
+
+All regular files under Data and _work are included, including unused archives
+and resources; this is a conservative compatibility check. `.DS_Store` is
+excluded. The selected mod INI's bytes are included even though it lives outside
+those trees. Symlinks, special files, missing/unreadable inputs, more than 100,000
+tree entries or manifest text over 4,096 bytes fail preparation. There is no
+mtime-only cache: equal-size modifications with preserved mtime still change the
+digest. File size and mtime are also checked around each read to reject observed
+concurrent modification. Runtime saves/logs and display/control settings are
+outside the manifest. Same content in a different installation directory agrees.
+
+The installation, selected settings and executable must stay unchanged while a
+network session runs; the fingerprint is a startup snapshot, not a file watcher
+or a filesystem transaction. Changing assets/configuration requires restarting
+the peers. The hashes compare compatibility and do not authenticate a player.
 
 ## Bounds, failures and stream handling
 
@@ -200,7 +304,7 @@ throws without changing the queue; counts cannot cross frame boundaries. Treat
 the returned span as borrowed and reacquire it after modifying the queue.
 
 There is no checksum in a frame and no encryption/authentication in this codec.
-Task N04 starts on loopback. Internet transport/security is outside N03.
+Connections are loopback-only. Internet transport/security is outside N04.
 
 ## Golden example
 
@@ -208,7 +312,7 @@ This 52-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 00000034 0001 0003
+4f474350 00000034 0002 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
@@ -219,12 +323,18 @@ checks an independent `Hello` vector, every split point and byte-at-a-time input
 combined frames, invalid headers/payloads, all truncated prefixes, bounded queues,
 blocked/partial writes, 10,000 ordered input messages under changing read/write
 boundaries and 10,000 deterministic mutated/truncated frames.
+On macOS, five additional test cases exercise endpoint parsing, real loopback
+acceptance and reconnect, both directions of fingerprint validation, version
+rejection, second-guest rejection, deadlines, pending-socket limits, and the
+actual file/manifest hash implementation using temporary files.
 
 ## Build and test without game files
 
 Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
-assets, start a GUI, or require initialized engine submodules.
+assets, start a GUI, or require initialized engine submodules. It runs 13 codec
+cases everywhere and five connection/fingerprint cases on macOS; the latter use
+loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh
 cmake -S tests/protocol -B build-protocol -G Ninja -DCMAKE_BUILD_TYPE=Release

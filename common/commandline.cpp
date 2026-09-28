@@ -73,6 +73,11 @@ CommandLine::CommandLine(int argc, const char** argv) {
         throw std::invalid_argument("-test-control requires a directory");
       testControl = argv[i];
       }
+    else if(arg=="-coop-host" || arg=="-coop-join") {
+      if(coop.role!=Coop::Role::Disabled || ++i>=argc)
+        throw std::invalid_argument("Specify exactly one -coop-host PORT or -coop-join 127.0.0.1:PORT");
+      coop = arg=="-coop-host" ? Coop::hostEndpoint(argv[i]) : Coop::joinEndpoint(argv[i]);
+      }
     else if(arg=="-save") {
       ++i;
       if(i<argc){

@@ -84,6 +84,7 @@ class Resources final {
     static const char*               renderer();
     static void                      mountWork(const std::filesystem::path& path);
     static void                      loadVdfs(const std::vector<std::u16string> &modvdfs, bool modFilter);
+    static const std::vector<std::filesystem::path>& mountedArchives() { return inst->archiveManifest; }
 
     static const Tempest::Sampler&   shadowSampler();
 
@@ -231,6 +232,7 @@ class Resources final {
     std::unique_ptr<Dx8::DirectMusic> dxMusic;
     DmLoader*                         dmLoader = nullptr;
     zenkit::Vfs                       gothicAssets;
+    std::vector<std::filesystem::path> archiveManifest;
 
     std::vector<uint8_t>              fBuff, ddsBuf;
     Tempest::IndexBuffer<uint16_t>    cube;

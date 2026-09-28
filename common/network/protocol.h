@@ -15,14 +15,14 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 1;
+inline constexpr uint16_t ProtocolVersion = 2;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
 inline constexpr size_t MaxQueueMessages   = 256;
 
 enum class MessageType : uint16_t {
-  Hello = 1, Welcome = 2, Input = 3, StateAck = 4, Reject = 5
+  Hello = 1, Welcome = 2, Input = 3, StateAck = 4, Reject = 5, Accepted = 6
   };
 
 enum class RejectReason : uint16_t {
@@ -44,6 +44,10 @@ struct Hello {
 struct Welcome {
   bool operator==(const Welcome&) const = default;
   };
+struct Accepted {
+  Hello identity;
+  bool operator==(const Accepted&) const = default;
+  };
 struct Input {
   uint32_t buttons = 0;
   int16_t  lookX = 0, lookY = 0;
@@ -58,7 +62,7 @@ struct Reject {
   bool operator==(const Reject&) const = default;
   };
 
-using Payload = std::variant<Hello,Welcome,Input,StateAck,Reject>;
+using Payload = std::variant<Hello,Welcome,Input,StateAck,Reject,Accepted>;
 
 struct Message {
   uint64_t generation = 0;

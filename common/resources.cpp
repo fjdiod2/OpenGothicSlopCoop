@@ -161,6 +161,7 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
         continue;
 #endif
       inst->gothicAssets.mount_disk(i.name, zenkit::VfsOverwriteBehavior::OLDER);
+      inst->archiveManifest.emplace_back(i.name);
       }
     catch(const zenkit::VfsBrokenDiskError& err) {
       Log::e("unable to load archive: \"", TextCodec::toUtf8(i.name), "\", reason: ", err.what());

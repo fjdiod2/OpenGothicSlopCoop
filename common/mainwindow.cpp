@@ -121,9 +121,12 @@ MainWindow::MainWindow(Device& device)
   displayPos = Shortcut(*this,Event::M_Alt,Event::K_P);
   displayPos.onActivated.bind(this, &MainWindow::onMarvinKey<Event::K_P>);
   initTestControl();
+  initNetwork();
   }
 
 MainWindow::~MainWindow() {
+  cancelFingerprint = true;
+  if(fingerprintJob.valid()) fingerprintJob.wait();
   GameMusic::inst().stopMusic();
   Gothic::inst().cancelLoading();
   device.waitIdle();
@@ -1354,6 +1357,7 @@ void MainWindow::setFullscreen(bool fs) {
 
 void MainWindow::render(){
   try {
+    tickNetwork();
     pollTestControl();
     static uint64_t time=Application::tickCount();
 

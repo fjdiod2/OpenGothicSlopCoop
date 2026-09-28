@@ -21,6 +21,9 @@
 
 #include <vector>
 #include <thread>
+#include <future>
+#include <atomic>
+#include "network/session.h"
 
 #include "world/world.h"
 #include "world/focus.h"
@@ -97,6 +100,15 @@ class MainWindow : public Tempest::Window {
     void setupUi();
 
     void render() override;
+
+    void initNetwork();
+    void tickNetwork();
+    Coop::Session network;
+    Coop::Hello networkIdentity;
+    std::atomic_bool cancelFingerprint = false;
+    std::future<Coop::Hello> fingerprintJob;
+    std::string networkPreparation;
+    uint64_t networkEvent = 0;
 
     // Local, opt-in development interface; all commands run on the game thread.
     void initTestControl();
