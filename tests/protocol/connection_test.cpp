@@ -404,6 +404,31 @@ void inputRoundtrip() {
   REQUIRE(!host.takeInput() && host.status().inputApplied==0);
   }
 
+void inputDisconnect() {
+  Session host, guest;
+  host.start({Role::Host,0},identity(),0);
+  guest.start({Role::Guest,host.status().port},identity(),0);
+  pump(host,guest,[&] { return host.status().state=="connected"; });
+  const auto generation = host.status().generation;
+  REQUIRE(host.bindCompanion(generation) && host.sendSnapshot(generation,1,Bytes{1}));
+  pump(host,guest,[&] { return guest.status().snapshotState=="received"; });
+  REQUIRE(guest.takeSnapshot() && guest.snapshotLoaded(generation,1));
+  pump(host,guest,[&] { return host.status().snapshotState=="ready"; });
+  REQUIRE(guest.sendInput({Forward,20,-10}));
+  pump(host,guest,[&] { return host.status().inputReceived==1; });
+  REQUIRE(host.takeInput() && host.inputApplied(generation,1,2));
+  // Leave movement/turn impulses queued, without a key release or application.
+  REQUIRE(guest.sendInput({Forward|TurnRight,100,100}));
+  pump(host,guest,[&] { return host.status().inputReceived==2; });
+  guest.start({},identity(),1);
+  pump(host,guest,[&] { return host.status().state=="listening"; });
+  const auto& state = host.status();
+  REQUIRE(state.disconnected==1 && state.generation==0 && state.boundPlayer==0);
+  REQUIRE(state.snapshotState=="none" && state.inputReceived==0 && state.inputApplied==0);
+  REQUIRE(!host.takeInput() && !host.inputApplied(generation,2,2));
+  REQUIRE(state.port!=0); // The host listener survives the lost controller.
+  }
+
 void inputValidation() {
   Session host, idle;
   host.start({Role::Host,0},identity(),0);
@@ -642,6 +667,7 @@ int main(int argc, char** argv) {
     else if(name=="snapshot-failures") snapshotFailures();
     else if(name=="input-roundtrip") inputRoundtrip();
     else if(name=="input-validation") inputValidation();
+    else if(name=="input-disconnect") inputDisconnect();
     else if(name=="poses-roundtrip") posesRoundtrip();
     else if(name=="poses-validation") posesValidation();
     else throw std::runtime_error("Unknown connection test");

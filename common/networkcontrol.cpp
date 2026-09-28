@@ -186,14 +186,20 @@ void MainWindow::tickNetworkInput() {
   auto& game = Gothic::inst();
   const auto& status = network.status();
   if(game.checkLoading()!=Gothic::LoadState::Idle) return;
-  if(networkControlGeneration!=status.generation) {
+  // A connection alone grants no control. Revoke its lease before the next
+  // simulation step as soon as its binding or snapshot readiness is lost.
+  // During asynchronous save/load ownership this waits until the game thread
+  // owns the world again; tick() cannot simulate it in the meantime.
+  const auto controlGeneration = status.boundPlayer==PlayerIdentity::Companion &&
+                                 status.snapshotState=="ready" ? status.generation : 0;
+  if(networkControlGeneration!=controlGeneration) {
     networkKeys.clear();
     networkButtons = remoteButtons = 0;
     networkInstalledInput = 0;
     networkInterpolation.reset();
     if(status.role==Coop::Role::Host && game.world() && game.world()->playerById(PlayerIdentity::Companion))
       controlForPlayer(PlayerIdentity::Companion).clearInput();
-    networkControlGeneration = status.generation;
+    networkControlGeneration = controlGeneration;
     }
   if(status.role!=Coop::Role::Host || status.snapshotState!="ready" || !game.world()) return;
   auto& control = controlForPlayer(PlayerIdentity::Companion);

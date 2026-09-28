@@ -378,9 +378,25 @@ world while the asynchronous loader owns it. Disconnect preserves the companion
 in the host world and its next checkpoint, while clearing transport authority.
 Restart loads the version-1 `coop/players` roster, which accepts only IDs 1 and 2;
 no socket binding/generation is stored in a save. Rejoining resolves that actor
-and receives a fresh generation. N09–N10 clear basic held input on generation
-loss; full disconnect/rejoin and
-coordinated save/load acceptance remain N11–N14.
+and receives a fresh generation.
+
+N11 grants movement control only while the current generation has companion ID 2
+bound and its snapshot is ready. Losing any of these clears held actions, pending
+mouse impulses, installed-input tracking and guest interpolation before the next
+simulation step. If a save/load worker owns the world, release waits for game-thread
+ownership; simulation cannot run in between. Socket destruction discards its queued
+input, poses and acknowledgements. The host's own controller is not cleared by
+companion disconnect. Ordinary stop animation/floor settling may finish afterward;
+the disconnected actor retains its identity, HP and inventory and is still saved.
+The host listener and campaign remain active. EOF/read/write errors trigger release;
+detecting a live but unresponsive peer without a socket error is not yet implemented.
+Wire version 4 and checkpoint version 56 are unchanged.
+
+The `disconnect-held` integration scenario kills the guest during forward/turn
+input while the host also moves, then verifies idle companion state and an offline
+checkpoint after full host restart. The asset-free `input-disconnect` case leaves
+unapplied input queued at socket closure and requires its removal. Fresh rejoin and
+coordinated save/load acceptance remain N12–N14.
 
 ## Starting and observing a connection
 
@@ -555,7 +571,7 @@ Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
 assets, start a GUI, or require initialized engine submodules. It runs 13 codec
 cases plus four object-registry and two interpolation cases everywhere, and
-thirteen connection/fingerprint cases on macOS (32 total); the latter use
+fourteen connection/fingerprint cases on macOS (33 total); the latter use
 loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh
