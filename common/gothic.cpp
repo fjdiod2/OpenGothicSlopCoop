@@ -613,6 +613,7 @@ void Gothic::cancelLoading() {
   }
 
 void Gothic::tick(uint64_t dt) {
+  if(networkPaused) return;
   if(pendingChapter){
     if(!isInDialog()) {
       onIntroChapter(chapter);

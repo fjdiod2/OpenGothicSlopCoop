@@ -287,6 +287,92 @@ void timeout() {
   REQUIRE(bounded.status().timeouts==Session::MaxPeers);
   }
 
+void snapshotRoundtrip() {
+  Session host, guest;
+  host.start({Role::Host,0},identity(),0);
+  guest.start({Role::Guest,host.status().port},identity(),0);
+  pump(host,guest,[&] { return host.status().state=="connected"; });
+  const auto generation = host.status().generation;
+  REQUIRE(host.bindCompanion(generation));
+  Bytes source(1024*1024+17);
+  for(size_t i=0; i<source.size(); ++i) source[i] = uint8_t(i*37);
+  REQUIRE(!host.sendSnapshot(generation,0,source));
+  REQUIRE(!guest.sendSnapshot(generation,1,source));
+  REQUIRE(host.sendSnapshot(generation,9,source));
+  REQUIRE(!host.sendSnapshot(generation,9,source));
+  pump(host,guest,[&] { return guest.status().snapshotState=="received"; });
+  REQUIRE(host.status().snapshotState=="awaiting_ready");
+  auto snapshot = guest.takeSnapshot();
+  REQUIRE(snapshot && snapshot->generation==generation && snapshot->revision==9 && snapshot->data==source);
+  REQUIRE(!guest.takeSnapshot());
+  REQUIRE(guest.status().snapshotDigest==hashBytes(source));
+  REQUIRE(!guest.snapshotLoaded(generation+1,9));
+  REQUIRE(!guest.snapshotLoaded(generation,8));
+  REQUIRE(guest.snapshotLoaded(generation,9));
+  REQUIRE(!guest.snapshotLoaded(generation,9));
+  pump(host,guest,[&] { return host.status().snapshotState=="ready"; });
+  REQUIRE(guest.status().snapshotState=="ready");
+  }
+
+void snapshotFailures() {
+  // Real stream interruption, with a nonempty partial archive buffered.
+  Session host, guest;
+  host.start({Role::Host,0},identity(),0);
+  guest.start({Role::Guest,host.status().port},identity(),0);
+  pump(host,guest,[&] { return host.status().state=="connected"; });
+  REQUIRE(host.bindCompanion(host.status().generation));
+  REQUIRE(host.sendSnapshot(host.status().generation,1,Bytes(1024*1024,42)));
+  pump(host,guest,[&] { return guest.status().snapshotTransferred>0; });
+  REQUIRE(guest.status().snapshotTransferred<guest.status().snapshotBytes);
+  host.invalidate("test_interruption");
+  pump(host,guest,[&] { return guest.status().state=="disconnected"; });
+  REQUIRE(!guest.takeSnapshot() && guest.status().snapshotBytes==0);
+
+  const Bytes data{4,5,6};
+  for(int fault=0; fault<9; ++fault) {
+    Socket server;
+    guest.start({Role::Guest,server.listen()},identity(),0);
+    guest.tick(1);
+    Socket peer;
+    ::close(peer.fd);
+    peer.fd = ::accept(server.fd,nullptr,nullptr);
+    REQUIRE(peer.fd>=0);
+    sendMessage(peer,{12,0,0,0,Accepted{identity()}});
+    sendMessage(peer,{12,2,0,1,Welcome{}});
+    const Message begin{12,2,0,1,SnapshotBegin{data.size(),hashBytes(data)}};
+    sendMessage(peer,begin);
+    if(fault==0) sendMessage(peer,begin); // Duplicate begin.
+    if(fault==1) sendMessage(peer,{12,2,0,1,SnapshotChunk{1,data}});
+    if(fault==2) sendMessage(peer,{13,2,0,1,SnapshotChunk{0,data}});
+    if(fault==3) sendMessage(peer,{12,1,0,1,SnapshotChunk{0,data}});
+    if(fault==4) sendMessage(peer,{12,2,0,2,SnapshotChunk{0,data}});
+    if(fault==5) sendMessage(peer,{12,2,0,1,SnapshotEnd{}});
+    if(fault==6) {
+      sendMessage(peer,{12,2,0,1,SnapshotChunk{0,{4,5,7}}});
+      sendMessage(peer,{12,2,0,1,SnapshotEnd{}});
+      }
+    if(fault==7) sendMessage(peer,{12,2,0,1,SnapshotReady{}});
+    if(fault==8) {
+      pump(host,guest,[&] { return guest.status().snapshotState=="receiving"; });
+      guest.tick(Session::SnapshotTimeoutMs+1);
+      }
+    pump(host,guest,[&] { return guest.status().state=="disconnected"; });
+    REQUIRE(!guest.takeSnapshot() && guest.status().boundPlayer==0);
+    }
+  // Completed bytes awaiting a loader must also be fenced by disconnect.
+  host.start({Role::Host,0},identity(),0);
+  guest.start({Role::Guest,host.status().port},identity(),0);
+  pump(host,guest,[&] { return host.status().state=="connected"; });
+  const auto generation = host.status().generation;
+  REQUIRE(host.bindCompanion(generation));
+  REQUIRE(host.sendSnapshot(generation,1,data));
+  pump(host,guest,[&] { return guest.status().snapshotState=="received"; });
+  REQUIRE(guest.takeSnapshot());
+  host.invalidate("test_loading_interruption");
+  pump(host,guest,[&] { return guest.status().state=="disconnected"; });
+  REQUIRE(!guest.snapshotLoaded(generation,1));
+  }
+
 struct Fixture {
   std::filesystem::path root = std::filesystem::temp_directory_path()/
     ("gothic-fingerprint-"+std::to_string(getpid()));
@@ -363,6 +449,8 @@ int main(int argc, char** argv) {
     else if(name=="fingerprints") fingerprints();
     else if(name=="binding") binding();
     else if(name=="binding-authority") bindingAuthority();
+    else if(name=="snapshot-roundtrip") snapshotRoundtrip();
+    else if(name=="snapshot-failures") snapshotFailures();
     else throw std::runtime_error("Unknown connection test");
     std::cout << "PASS: " << name << '\n';
     return 0;

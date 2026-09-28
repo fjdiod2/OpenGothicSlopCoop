@@ -41,6 +41,10 @@ size_t bodySize(MessageType type) {
     case MessageType::Input:    return 8;
     case MessageType::StateAck: return 8;
     case MessageType::Reject:   return 2;
+    case MessageType::SnapshotBegin: return 40;
+    case MessageType::SnapshotChunk: return 8; // Offset prefix; bounded data follows.
+    case MessageType::SnapshotEnd:
+    case MessageType::SnapshotReady: return 0;
     }
   invalid(ProtocolErrorCode::Type,"Unknown co-op message type");
   }
@@ -54,6 +58,10 @@ void validateHeader(const Message& message, MessageType type) {
       break;
     case MessageType::Welcome:
     case MessageType::StateAck:
+    case MessageType::SnapshotBegin:
+    case MessageType::SnapshotChunk:
+    case MessageType::SnapshotEnd:
+    case MessageType::SnapshotReady:
       valid = message.generation!=0 && message.player!=0 && message.sequence==0 && message.revision!=0;
       break;
     case MessageType::Input:
@@ -68,6 +76,15 @@ void validateHeader(const Message& message, MessageType type) {
   }
 
 void validatePayload(const Message& message) {
+  if(auto begin = std::get_if<SnapshotBegin>(&message.payload)) {
+    if(begin->bytes==0 || begin->bytes>MaxSnapshotBytes)
+      invalid(ProtocolErrorCode::Size,"Invalid snapshot size");
+    }
+  if(auto chunk = std::get_if<SnapshotChunk>(&message.payload)) {
+    if(chunk->data.empty() || chunk->data.size()>SnapshotChunkBytes ||
+       chunk->offset>MaxSnapshotBytes || chunk->data.size()>MaxSnapshotBytes-chunk->offset)
+      invalid(ProtocolErrorCode::Size,"Invalid snapshot chunk");
+    }
   if(auto input = std::get_if<Input>(&message.payload)) {
     if((input->buttons & ~KnownButtons)!=0 ||
        input->lookX < -MaxLookDelta || input->lookX > MaxLookDelta ||
@@ -100,7 +117,9 @@ Message readHeader(std::span<const uint8_t> bytes) {
   if(get(bytes,8,2)!=ProtocolVersion)
     invalid(ProtocolErrorCode::Version,"Unsupported co-op protocol version");
   const auto type = MessageType(get(bytes,10,2));
-  if(get(bytes,4,4)!=HeaderBytes+bodySize(type))
+  const auto length = get(bytes,4,4);
+  const auto fixed = HeaderBytes+bodySize(type);
+  if(type==MessageType::SnapshotChunk ? (length<=fixed || length>fixed+SnapshotChunkBytes) : length!=fixed)
     invalid(ProtocolErrorCode::Size,"Co-op payload length does not match message type");
   Message message;
   message.generation = get(bytes,12,8);
@@ -115,6 +134,10 @@ Message readHeader(std::span<const uint8_t> bytes) {
     case MessageType::StateAck: message.payload = StateAck{}; break;
     case MessageType::Reject:   message.payload = Reject{};   break;
     case MessageType::Accepted: message.payload = Accepted{}; break;
+    case MessageType::SnapshotBegin: message.payload = SnapshotBegin{}; break;
+    case MessageType::SnapshotChunk: message.payload = SnapshotChunk{}; break;
+    case MessageType::SnapshotEnd: message.payload = SnapshotEnd{}; break;
+    case MessageType::SnapshotReady: message.payload = SnapshotReady{}; break;
     }
   return message;
   }
@@ -131,6 +154,18 @@ Message decode(std::span<const uint8_t> bytes) {
       break;
       }
     case MessageType::Welcome:
+    case MessageType::SnapshotEnd:
+    case MessageType::SnapshotReady:
+      break;
+    case MessageType::SnapshotBegin: {
+      SnapshotBegin begin;
+      begin.bytes = get(bytes,44,8);
+      std::copy_n(bytes.begin()+52,32,begin.digest.begin());
+      message.payload = begin;
+      break;
+      }
+    case MessageType::SnapshotChunk:
+      message.payload = SnapshotChunk{get(bytes,44,8),Bytes(bytes.begin()+52,bytes.end())};
       break;
     case MessageType::Input:
       message.payload = Input{uint32_t(get(bytes,44,4)),getSigned(bytes,48),getSigned(bytes,50)};
@@ -159,6 +194,10 @@ MessageType messageType(const Message& message) {
   if(std::holds_alternative<StateAck>(message.payload)) return MessageType::StateAck;
   if(std::holds_alternative<Reject>(message.payload))   return MessageType::Reject;
   if(std::holds_alternative<Accepted>(message.payload)) return MessageType::Accepted;
+  if(std::holds_alternative<SnapshotBegin>(message.payload)) return MessageType::SnapshotBegin;
+  if(std::holds_alternative<SnapshotChunk>(message.payload)) return MessageType::SnapshotChunk;
+  if(std::holds_alternative<SnapshotEnd>(message.payload)) return MessageType::SnapshotEnd;
+  if(std::holds_alternative<SnapshotReady>(message.payload)) return MessageType::SnapshotReady;
   invalid(ProtocolErrorCode::Type,"Missing co-op payload");
   }
 
@@ -167,9 +206,11 @@ Bytes encode(const Message& message) {
   validateHeader(message,type);
   validatePayload(message);
   Bytes bytes;
-  bytes.reserve(HeaderBytes+bodySize(type));
+  const auto chunk = std::get_if<SnapshotChunk>(&message.payload);
+  const auto length = HeaderBytes+bodySize(type)+(chunk ? chunk->data.size() : 0);
+  bytes.reserve(length);
   bytes.insert(bytes.end(),{'O','G','C','P'});
-  put(bytes,HeaderBytes+bodySize(type),4);
+  put(bytes,length,4);
   put(bytes,ProtocolVersion,2);
   put(bytes,uint16_t(type),2);
   put(bytes,message.generation,8);
@@ -186,6 +227,18 @@ Bytes encode(const Message& message) {
       break;
       }
     case MessageType::Welcome:
+    case MessageType::SnapshotEnd:
+    case MessageType::SnapshotReady:
+      break;
+    case MessageType::SnapshotBegin: {
+      const auto& begin = std::get<SnapshotBegin>(message.payload);
+      put(bytes,begin.bytes,8);
+      bytes.insert(bytes.end(),begin.digest.begin(),begin.digest.end());
+      break;
+      }
+    case MessageType::SnapshotChunk:
+      put(bytes,chunk->offset,8);
+      bytes.insert(bytes.end(),chunk->data.begin(),chunk->data.end());
       break;
     case MessageType::Input: {
       const auto& input = std::get<Input>(message.payload);
@@ -276,6 +329,8 @@ std::optional<Message> Decoder::pop() {
   auto message = std::move(ready.front());
   ready.pop_front();
   queuedBytes -= HeaderBytes+bodySize(messageType(message));
+  if(auto chunk = std::get_if<SnapshotChunk>(&message.payload))
+    queuedBytes -= chunk->data.size();
   return message;
   }
 

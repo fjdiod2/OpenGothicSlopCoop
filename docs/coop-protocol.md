@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 2 (N07)
+# Co-op wire protocol, version 3 (N08)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -11,15 +11,15 @@ N04 adds the nonblocking TCP connection and compatibility handshake in
 [`session.cpp`](../common/network/session.cpp), with background fingerprints in
 [`fingerprint.cpp`](../common/network/fingerprint.cpp). Real engines can now
 connect on macOS loopback. N05 binds the host's saved companion to that connection.
-N07 makes the guest a presentation-only process; N08 transfers state, and N09
+N07 makes the guest a presentation-only process; N08 transfers a host checkpoint, and N09
 routes input. The codec is shared engine source, not a separate mock protocol
 used only by tests.
 
-Version 2 adds `Accepted` so compatibility acceptance does not prematurely claim
-that a character has been assigned. Version-1 peers are rejected explicitly.
-N05 enables the already-defined `Welcome` message without changing its encoding;
-the wire version remains 2. The exact executable fingerprint prevents an older
-engine implementation from passing the compatibility handshake.
+Version 3 adds snapshot begin/chunk/end/readiness messages. Older versions are
+rejected explicitly. Version 2 introduced `Accepted`, separating compatibility
+from companion assignment. Existing messages retain their layouts, apart from
+the required version field. The exact executable fingerprint also prevents
+mixing different engine implementations.
 
 N06 adds a persistent, typed world-object registry and checkpoint format, without
 changing the wire messages. See [world object identities](coop-objects.md) for
@@ -47,19 +47,18 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `2` |
+| 8 | 2 | Version | Exactly `3` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
 | 28 | 8 | Input sequence | Nonzero only in `Input` |
-| 36 | 8 | State revision | Nonzero only in `Welcome` and `StateAck` |
+| 36 | 8 | State revision | Nonzero in `Welcome`, `StateAck` and snapshot messages |
 
-The frame length must be between 44 and 65,536 bytes inclusive. Every current
-message also has an **exact** length; the global maximum does not permit padding,
-extra fields or an arbitrary payload. The decoder checks the prefix after eight
-bytes and validates the complete header before buffering the body. The largest
-current frame is 108 bytes. The larger cap leaves room for future bounded
-snapshot chunks; snapshot messages are not defined in version 2.
+The frame length must be between 44 and 65,536 bytes inclusive. Fixed messages
+have exact lengths. `SnapshotChunk` permits only its eight-byte offset and
+1–32,768 data bytes (53–32,820 bytes total). The decoder validates the prefix
+after eight bytes and the complete header before buffering the body. Padding
+and undeclared extensions are forbidden.
 
 ## Message definitions
 
@@ -71,6 +70,10 @@ snapshot chunks; snapshot messages are not defined in version 2.
 | 4 | `StateAck` | Host → guest | 52 | `nonzero / nonzero / 0 / nonzero` |
 | 5 | `Reject` | Host → guest | 46 | `0 / 0 / 0 / 0` |
 | 6 | `Accepted` | Host → guest | 108 | `nonzero / 0 / 0 / 0` |
+| 7 | `SnapshotBegin` | Host → guest | 84 | `nonzero / 2 / 0 / nonzero` |
+| 8 | `SnapshotChunk` | Host → guest | 53–32,820 | `nonzero / 2 / 0 / nonzero` |
+| 9 | `SnapshotEnd` | Host → guest | 44 | `nonzero / 2 / 0 / nonzero` |
+| 10 | `SnapshotReady` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
 
 ### Hello
 
@@ -92,7 +95,8 @@ reserves the single guest slot; the host binds the character in a subsequent ste
 
 The current session implementation accepts only `Hello` on the host and
 `Accepted`/`Reject` on the guest during the handshake. After acceptance, the guest
-accepts one `Welcome`. All other application messages close that peer with an
+accepts one `Welcome`, followed by one snapshot transfer. The host accepts its
+readiness acknowledgement. Other application messages close that peer with an
 observable reason. An accepted connection remains open until disconnect/error
 or world replacement. There is no heartbeat or idle timeout after acceptance yet.
 
@@ -101,8 +105,7 @@ or world replacement. There is no heartbeat or idle timeout after acceptance yet
 No body. The host supplies the generation, assigned persistent player identity
 and initial authoritative revision in the header. It is the only message that
 establishes a binding. It does not mean that the guest has loaded a world or may
-already send gameplay input; snapshot transfer/readiness is a later protocol
-extension (N08).
+already send gameplay input; the snapshot barrier described below must finish.
 
 Host ID `1` and companion ID `2` are persistent roster identities, separate from
 socket IDs and connection order. The codec accepts any nonzero player field.
@@ -118,18 +121,64 @@ The transport keeps no NPC pointer or runtime array index. Its host-only
 generation. Repeating it for the live generation succeeds without another frame.
 
 The host sends `Welcome(generation, player=2, sequence=0, revision=1)` after
-`Accepted`. Revision 1 is the initial binding baseline; no replicated state or
-ongoing revision tracking exists yet. The guest requires the accepted generation,
+`Accepted`. Revision 1 is the initial binding/snapshot baseline; ongoing
+revision tracking awaits N10. The guest requires the accepted generation,
 ID 2 and revision 1. A mismatched or repeated `Welcome` closes it with
 `invalid_binding`; one before `Accepted` fails the handshake. A guest sending
 `Welcome` to the host, or naming host/unknown player IDs after acceptance, is
 disconnected with `authority_violation`. Even input naming ID 2 is disabled and
-closes with `unexpected_message` until the later snapshot/readiness work.
+closes with `unexpected_message` until N09 input routing.
 
 Binding does not create an actor in the guest world, switch its local camera or
-route its input. These require N08–N09. The host reports its binding when the
+route its input. Snapshot activation selects its camera; input routing is N09. The host reports its binding when the
 Welcome is queued; the guest reports it only after validating the received frame.
 This is assignment metadata, not a guest readiness acknowledgement.
+
+### Initial snapshot and readiness barrier (N08)
+
+`SnapshotBegin` contains a big-endian u64 archive length at byte 44 and a raw
+32-byte SHA-256 at byte 52. Length must be 1–67,108,864 bytes (64 MiB).
+`SnapshotChunk` contains a big-endian u64 archive offset at byte 44 and 1–32 KiB
+of data starting at byte 52. `SnapshotEnd` and `SnapshotReady` have no body.
+Every frame must match the accepted generation, companion ID 2 and the same
+nonzero snapshot revision. Begin/end occur once; chunks must be contiguous,
+start at zero and fill the declared length exactly. Wrong direction, phase,
+offset, generation, identity, revision, size or checksum closes the connection.
+
+After binding on the game thread, the host clears held controls and serializes
+its current version-56 checkpoint, including both actors, inventories, script
+variables/quests, world objects, registry and saved world tick. A tiny zeroed
+preview replaces the normal screenshot. Generation/revision belong to the
+transport envelope, not the persistent save. Capture is synchronous at one
+simulation boundary. The host then holds simulation and input until the guest's
+`SnapshotReady` arrives. Therefore no world updates accumulate during loading;
+N08 needs no catch-up log. Joining during dialogue, inventory, video or a cutscene
+waits for that interaction to finish. Host saving is denied during this barrier.
+
+The connection queues bounded chunks as capacity permits; it does not enqueue
+the entire archive. The guest allocates only received bytes, bounded by the
+announced total, checks SHA-256 after the complete end marker, then hands those
+bytes to the background checkpoint loader with immutable **Guest** authority.
+It selects local companion ID 2 while retaining canonical host `HERO`, then
+queues `SnapshotReady`. No campaign startup or guest save-file copy is involved.
+The host resumes on receipt. Input routing is still disabled until N09.
+
+Transfer plus load has a 180-second deadline on each side, starting at send/begin.
+Disconnect, timeout or load failure discards transfer state and releases the host
+barrier. Partial bytes never reach the loader. If a completed loader returns
+after its connection/generation was cancelled, the result is discarded before
+a frame can display it or acknowledge readiness. A loaded guest remains read-only
+on subsequent disconnect. TCP/SHA-256 detect incomplete/corrupt data; they do not
+authenticate a hostile host or make arbitrary native save parsing safe.
+
+Development observations include `snapshot_state`, `snapshot_revision`,
+`snapshot_bytes`, `snapshot_transferred`, `snapshot_digest`, `snapshot_tick` and
+`paused`. Host transferred bytes count queued archive bytes; guest bytes count
+received archive bytes. Test-control launches retain the original host archive
+at `snapshot_artifact` for independent comparisons. Normal launches use memory.
+The asset-free tests exercise large transfers, offsets, checksum, duplicate
+begin, early end, wrong direction/generation/identity/revision, timeout, partial
+EOF and cancellation while the application owns a completed snapshot.
 
 ### Input
 
@@ -166,8 +215,8 @@ discrete interactions and inventory commands require a later extension.
 Reserved for later gameplay replication; not enabled by the N05 session.
 The header revision identifies the authoritative state after applying that
 input. This message carries a revision and acknowledgement only; it contains no
-pose or world state and does not replicate either. N08/N10 will define snapshots
-and state updates separately.
+pose or world state and does not replicate either. N08 snapshots and N10 pose
+updates use separate messages.
 
 ### Reject
 
@@ -179,7 +228,7 @@ Reasons: `1` protocol version, `2` engine fingerprint, `3` game-data fingerprint
 `4` host full, `5` invalid session/handshake. Any other value is malformed. No
 arbitrary error string crosses the wire. A reject is a terminal handshake reply,
 followed by closing the connection. On an undecodable/unsupported peer version,
-closing without a reply is also valid; a peer might not understand a version-2
+closing without a reply is also valid; a peer might not understand a version-3
 reject. Runtime connection failure and stale input are handled by the session
 layer, not by sending an unbound reject in the middle of gameplay.
 
@@ -191,7 +240,7 @@ sequence tracking and advancing state revisions remain requirements for later ta
 
 1. An unbound connection accepts one `Hello`. The host either rejects it or
    returns one `Accepted`. Both sides verify compatibility; only then may the
-   host issue a `Welcome` binding. World readiness comes later. Unexpected
+   host issue a `Welcome` binding. World readiness follows the snapshot barrier. Unexpected
    message types for the direction/phase close the peer. A valid `Input` cannot
    bypass this.
 2. The host issues a fresh nonzero generation for each accepted connection,
@@ -225,7 +274,7 @@ in the host world and its next checkpoint, while clearing transport authority.
 Restart loads the version-1 `coop/players` roster, which accepts only IDs 1 and 2;
 no socket binding/generation is stored in a save. Rejoining resolves that actor
 and receives a fresh generation. Synchronizing active input with a checkpoint,
-clearing held network input and resuming a guest from a snapshot remain N08–N14.
+clearing held network input and coordinating save/load input remain N09–N14.
 
 ## Starting and observing a connection
 
@@ -250,7 +299,7 @@ work. POSIX transport code is isolated from the engine/renderer.
 Fingerprinting runs once in a cancellable background job. Sockets start after it
 succeeds; preparation failure leaves the game running and reports the error.
 Socket operations are nonblocking, including connect (zero-timeout readiness
-poll plus `SO_ERROR`). Each peer gets at most four 4-KiB reads and four writes per
+poll plus `SO_ERROR`). Each peer gets at most four 16-KiB reads and four writes of at most 16 KiB per
 render tick; at most four accepts are attempted. There are at most four sockets
 including accepted and pending peers. Excess pending peers are closed and
 reported as `pending_limit`. An ordinary second guest receives `Reject(Full)`
@@ -273,7 +322,8 @@ States include `disabled`, `fingerprinting`, `listening`,
 `fingerprint_error: ...`. Host state remains `connected` when refusing an extra
 guest; the reason/counter reports that separate event. `connected` means the
 compatibility handshake passed, even while waiting for binding. A bound guest
-owns companion ID 2 on the host; it still awaits replicated world readiness.
+owns companion ID 2 on the host; `snapshot_state == "ready"` reports snapshot
+activation (guest) or receipt of that acknowledgement (host).
 
 ## Exact compatibility fingerprint inputs
 
@@ -360,7 +410,7 @@ This 52-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 00000034 0002 0003
+4f474350 00000034 0003 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
@@ -371,7 +421,7 @@ checks an independent `Hello` vector, every split point and byte-at-a-time input
 combined frames, invalid headers/payloads, all truncated prefixes, bounded queues,
 blocked/partial writes, 10,000 ordered input messages under changing read/write
 boundaries and 10,000 deterministic mutated/truncated frames.
-On macOS, seven additional test cases exercise endpoint parsing, real loopback
+On macOS, nine additional test cases exercise endpoint parsing, real loopback
 acceptance and reconnect, both directions of fingerprint validation, version
 rejection, second-guest rejection, deadlines, pending-socket limits, and the
 actual file/manifest hash implementation using temporary files. Binding tests
@@ -385,8 +435,8 @@ checks live and saved NPC reuse, separate inventory/HP/poses and script identity
 Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
 assets, start a GUI, or require initialized engine submodules. It runs 13 codec
-cases plus four object-registry cases everywhere, and seven connection/fingerprint
-cases on macOS (24 total); the latter use
+cases plus four object-registry cases everywhere, and nine connection/fingerprint
+cases on macOS (26 total); the latter use
 loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh
@@ -404,7 +454,7 @@ are fatal in the sanitized build. The parent tools repository's
 
 ## Version changes
 
-Unknown versions and message types are rejected, and body sizes are exact.
+Unknown versions and message types are rejected, and body sizes are validated.
 Adding fields, changing their meaning or adding new messages requires a protocol
 version bump (or an explicitly designed negotiation extension in a later version).
 Update this document and the fixed byte vectors with every wire change. Do not

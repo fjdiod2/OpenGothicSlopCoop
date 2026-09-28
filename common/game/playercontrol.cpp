@@ -50,7 +50,7 @@ void PlayerControl::setupSettings() {
   }
 
 void PlayerControl::setTarget(Npc *other) {
-  if(Gothic::inst().isGuest()) return;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   auto w  = Gothic::inst().world();
   auto pl = w ? controlledPlayer() : nullptr;
   if(pl==nullptr || pl->isFinishingMove())
@@ -68,7 +68,7 @@ void PlayerControl::setTarget(Npc *other) {
   }
 
 void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType key, KeyCodec::Mapping mapping) {
-  if(Gothic::inst().isGuest()) return;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   auto       w    = Gothic::inst().world();
   auto       c    = controlledCamera();
   auto       pl   = w  ? controlledPlayer() : nullptr;
@@ -223,7 +223,7 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
   }
 
 void PlayerControl::onKeyReleased(KeyCodec::Action a, KeyCodec::Mapping mapping) {
-  if(Gothic::inst().isGuest()) return;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   ctrl[a] = false;
 
   handleMovementAction(KeyCodec::ActionMapping{a, mapping}, false);
@@ -272,7 +272,7 @@ bool PlayerControl::isPressed(KeyCodec::Action a) const {
   }
 
 void PlayerControl::onRotateMouse(float dAngleX, float dAngleY) {
-  if(Gothic::inst().isGuest()) return;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   rotMouse  += dAngleX;
   rotMouseY += dAngleY;
   }
@@ -295,7 +295,7 @@ void PlayerControl::drawVobRay(DbgPainter& p) const {
   }
 
 void PlayerControl::tickFocus() {
-  if(Gothic::inst().isGuest()) return;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   currentFocus = findFocus(&currentFocus);
   setTarget(currentFocus.npc);
 
@@ -584,7 +584,7 @@ bool PlayerControl::tickCameraMove(uint64_t dt) {
   }
 
 bool PlayerControl::tickMove(uint64_t dt) {
-  if(Gothic::inst().isGuest()) return false;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return false;
   auto w = Gothic::inst().world();
   if(w==nullptr)
     return false;

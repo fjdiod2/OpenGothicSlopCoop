@@ -41,7 +41,7 @@ Message input(uint64_t sequence=9) {
 
 // Independent literal from docs/coop-protocol.md, not constructed by the codec.
 Bytes goldenInput() {
-  return hex("4f4743500000003400020003"
+  return hex("4f4743500000003400030003"
              "0102030405060708" "0000000000000002"
              "0000000000000009" "0000000000000000"
              "00000081fffb0064");
@@ -66,7 +66,11 @@ std::vector<Message> examples() {
     {0,0,0,0,Reject{RejectReason::Engine}},
     {0,0,0,0,Reject{RejectReason::GameData}},
     {0,0,0,0,Reject{RejectReason::Full}},
-    {0,0,0,0,Reject{RejectReason::Session}}
+    {0,0,0,0,Reject{RejectReason::Session}},
+    {4,2,0,1,SnapshotBegin{100,{}}},
+    {4,2,0,1,SnapshotChunk{0,{1,2,3}}},
+    {4,2,0,1,SnapshotEnd{}},
+    {4,2,0,1,SnapshotReady{}}
     };
   }
 
@@ -110,7 +114,7 @@ void messageTypes() {
     }
   // A second literal covers the variable fingerprints and byte order of a
   // different message type, so matching encode/decode bugs cannot hide it.
-  const auto hello = hex("4f4743500000006c00020001"
+  const auto hello = hex("4f4743500000006c00030001"
                          "00000000000000000000000000000000"
                          "00000000000000000000000000000000"
                          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -197,6 +201,7 @@ void malformedHeader() {
     }
   for(auto& message:examples()) {
     auto bytes = encode(message);
+    if(std::holds_alternative<SnapshotChunk>(message.payload)) bytes[7] = 52; else
     ++bytes[7]; // Within the global cap, but wrong for this message schema.
     bytes.resize(HeaderBytes);
     reject(bytes,ProtocolErrorCode::Size);
@@ -264,6 +269,11 @@ void encodeValidation() {
     error(ProtocolErrorCode::Fields,[&] { encode(message); });
     }
   error(ProtocolErrorCode::Fields,[] { encode({0,0,0,0,Reject{RejectReason(0)}}); });
+  for(auto size:{uint64_t(0),uint64_t(MaxSnapshotBytes)+1})
+    error(ProtocolErrorCode::Size,[&] { encode({1,2,0,1,SnapshotBegin{size,{}}}); });
+  for(auto chunk:{SnapshotChunk{0,{}},SnapshotChunk{0,Bytes(SnapshotChunkBytes+1)},
+                  SnapshotChunk{MaxSnapshotBytes,Bytes{1}}})
+    error(ProtocolErrorCode::Size,[&] { encode({1,2,0,1,chunk}); });
   }
 
 void eof() {

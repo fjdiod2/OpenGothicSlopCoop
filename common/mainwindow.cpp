@@ -421,7 +421,7 @@ void MainWindow::mouseWheelEvent(MouseEvent &event) {
   }
 
 void MainWindow::keyDownEvent(KeyEvent &event) {
-  if(Gothic::inst().isGuest()) return;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   if(video.isActive()){
     event.accept();
     video.keyDownEvent(event);
@@ -519,7 +519,7 @@ void MainWindow::keyRepeatEvent(KeyEvent& event) {
   }
 
 void MainWindow::keyUpEvent(KeyEvent &event) {
-  if(Gothic::inst().isGuest()) return;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   if(uiKeyUp==&video){
     video.keyUpEvent(event);
     if(event.isAccepted())
@@ -806,7 +806,7 @@ void MainWindow::isDialogClosed(bool& ret) {
 
 template<Tempest::KeyEvent::KeyType k>
 void MainWindow::onMarvinKey() {
-  if(Gothic::inst().isGuest()) return;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   switch(k) {
     case Event::K_F2:
       if(Gothic::inst().isMarvinEnabled()) {
@@ -909,6 +909,7 @@ uint64_t MainWindow::tick() {
     if(loadStatus=="pending")
       loadStatus = st==Gothic::LoadState::Finalize ? "loaded" : "failed";
     Gothic::inst().finishLoading();
+    finishNetworkLoad(st==Gothic::LoadState::Finalize);
     if(st==Gothic::LoadState::FailedLoad)
       rootMenu.setMainMenu();
     if(st==Gothic::LoadState::FailedSave)
@@ -926,7 +927,7 @@ uint64_t MainWindow::tick() {
   if(video.isActive())
     return 0;
 
-  if(Gothic::inst().isPause()) {
+  if(Gothic::inst().isPause() || Gothic::inst().isNetworkPaused()) {
     return 0;
     }
 
@@ -1073,7 +1074,7 @@ Camera::Mode MainWindow::solveCameraMode() const {
   }
 
 void MainWindow::startGame(std::string_view slot) {
-  if(Gothic::inst().isGuest()) return;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   // gothic.emitGlobalSound(gothic.loadSoundFx("NEWGAME"));
   loadStatus = "pending";
 
@@ -1111,6 +1112,7 @@ void MainWindow::loadGame(std::string_view slot) {
   }
 
 void MainWindow::saveGame(std::string_view slot, std::string_view name) {
+  if(Gothic::inst().isNetworkPaused()) { saveStatus = "denied_snapshot"; return; }
   if(Gothic::inst().isGuest()) {
     saveStatus = "denied_guest";
     return;
@@ -1206,7 +1208,7 @@ void MainWindow::onVideo(std::string_view fname) {
   }
 
 void MainWindow::onStartLoading() {
-  if(Gothic::inst().checkLoading()==Gothic::LoadState::Loading)
+  if(Gothic::inst().checkLoading()==Gothic::LoadState::Loading && !networkLoading)
     network.invalidate("world_replaced");
   player   .clearInput();
   for(auto& entry:otherPlayers) {

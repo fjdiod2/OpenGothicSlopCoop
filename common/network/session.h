@@ -26,12 +26,21 @@ struct NetworkStatus {
   uint64_t accepted = 0, rejected = 0, timeouts = 0, disconnected = 0;
   uint64_t events = 0;
   size_t peers = 0;
+  std::string snapshotState = "none";
+  uint64_t snapshotRevision = 0, snapshotBytes = 0, snapshotTransferred = 0;
+  Fingerprint snapshotDigest = {};
+  };
+
+struct Snapshot {
+  uint64_t generation = 0, revision = 0;
+  Bytes data;
   };
 
 class Session final {
   public:
     static constexpr uint64_t HandshakeTimeoutMs = 5000;
     static constexpr size_t MaxPeers = 4;
+    static constexpr uint64_t SnapshotTimeoutMs = 180000;
 
     Session();
     ~Session();
@@ -42,6 +51,9 @@ class Session final {
     // Host only, after resolving/creating its saved companion. No requested ID.
     // Repeated calls for the current generation are idempotent.
     bool bindCompanion(uint64_t generation);
+    bool sendSnapshot(uint64_t generation, uint64_t revision, Bytes data);
+    std::optional<Snapshot> takeSnapshot();
+    bool snapshotLoaded(uint64_t generation, uint64_t revision);
     // Discard connection authority on world replacement; retain the listener.
     void invalidate(const std::string& reason);
     const NetworkStatus& status() const;

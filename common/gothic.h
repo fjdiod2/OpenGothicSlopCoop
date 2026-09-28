@@ -72,6 +72,8 @@ class Gothic final {
 
     bool         isInGame() const;
     bool         isGuest() const;
+    bool         isNetworkPaused() const { return networkPaused; }
+    void         setNetworkPaused(bool value) { networkPaused = value; }
     bool         isInGameAndAlive() const;
 
     std::string_view defaultWorld()       const;
@@ -228,6 +230,7 @@ class Gothic final {
     bool                                    godMode        = false;
     bool                                    desktop        = false;
     uint64_t                                localPlayerIdentity = 1;
+    bool                                    networkPaused = false;
     bool                                    showFpsCounter = false;
     bool                                    showTime       = false;
     bool                                    vobBox         = false;

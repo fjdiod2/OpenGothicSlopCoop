@@ -88,6 +88,14 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("generation"); out.Uint64(net.generation);
   out.Key("bound_player"); out.Uint64(net.boundPlayer);
   out.Key("binding_revision"); out.Uint64(net.bindingRevision);
+  out.Key("snapshot_state"); str(net.snapshotState);
+  out.Key("snapshot_revision"); out.Uint64(net.snapshotRevision);
+  out.Key("snapshot_bytes"); out.Uint64(net.snapshotBytes);
+  out.Key("snapshot_transferred"); out.Uint64(net.snapshotTransferred);
+  out.Key("snapshot_digest"); str(Coop::hexFingerprint(net.snapshotDigest));
+  out.Key("snapshot_tick"); out.Uint64(networkSnapshotTick);
+  out.Key("snapshot_artifact"); str(networkSnapshotArtifact);
+  out.Key("paused"); out.Bool(game.isNetworkPaused());
   out.Key("bindings"); out.Uint64(net.bindings);
   out.Key("peers"); out.Uint64(net.peers);
   out.Key("accepted"); out.Uint64(net.accepted);
@@ -296,6 +304,9 @@ void MainWindow::pollTestControl() {
       }
     if(!game.player() && action!="screenshot_ui" && action!="start_game")
       throw std::runtime_error("No player is ready");
+    if(game.isNetworkPaused() && action!="key" && action!="chord" && action!="mouse" &&
+       action!="screenshot" && action!="screenshot_ui" && action!="campaign_probe" && action!="save")
+      throw std::runtime_error("Campaign held at snapshot boundary");
     testInputPlayer = game.localPlayerId();
     if(cmd.HasMember("player")) {
       if(!cmd["player"].IsUint64() || game.world()==nullptr || !game.world()->playerById(cmd["player"].GetUint64()))

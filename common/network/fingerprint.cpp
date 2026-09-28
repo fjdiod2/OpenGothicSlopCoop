@@ -59,6 +59,21 @@ void appendTree(std::vector<Entry>& entries, const std::filesystem::path& root, 
 #endif
 }
 
+Fingerprint hashBytes(std::span<const uint8_t> bytes) {
+#ifdef __APPLE__
+  Hash hash;
+  while(!bytes.empty()) {
+    const auto chunk = bytes.first(std::min(bytes.size(),size_t(1024*1024)));
+    hash.bytes(chunk);
+    bytes = bytes.subspan(chunk.size());
+    }
+  return hash.finish();
+#else
+  (void)bytes;
+  throw std::runtime_error("Co-op fingerprints currently require macOS CommonCrypto");
+#endif
+  }
+
 Fingerprint hashFile(const std::filesystem::path& file, const std::atomic_bool& cancel) {
 #ifdef __APPLE__
   namespace fs = std::filesystem;

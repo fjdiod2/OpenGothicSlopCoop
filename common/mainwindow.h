@@ -109,6 +109,10 @@ class MainWindow : public Tempest::Window {
     std::future<Coop::Hello> fingerprintJob;
     std::string networkPreparation;
     uint64_t networkEvent = 0;
+    bool networkLoading = false;
+    uint64_t networkLoadGeneration = 0, networkLoadRevision = 0, networkSnapshotTick = 0;
+    std::string networkSnapshotArtifact;
+    void finishNetworkLoad(bool success);
 
     // Local, opt-in development interface; all commands run on the game thread.
     void initTestControl();

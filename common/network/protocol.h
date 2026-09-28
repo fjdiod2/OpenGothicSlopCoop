@@ -15,14 +15,17 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 2;
+inline constexpr uint16_t ProtocolVersion = 3;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
 inline constexpr size_t MaxQueueMessages   = 256;
+inline constexpr size_t MaxSnapshotBytes   = 64*1024*1024;
+inline constexpr size_t SnapshotChunkBytes = 32*1024;
 
 enum class MessageType : uint16_t {
-  Hello = 1, Welcome = 2, Input = 3, StateAck = 4, Reject = 5, Accepted = 6
+  Hello = 1, Welcome = 2, Input = 3, StateAck = 4, Reject = 5, Accepted = 6,
+  SnapshotBegin = 7, SnapshotChunk = 8, SnapshotEnd = 9, SnapshotReady = 10
   };
 
 enum class RejectReason : uint16_t {
@@ -62,7 +65,21 @@ struct Reject {
   bool operator==(const Reject&) const = default;
   };
 
-using Payload = std::variant<Hello,Welcome,Input,StateAck,Reject,Accepted>;
+struct SnapshotBegin {
+  uint64_t bytes = 0;
+  Fingerprint digest = {};
+  bool operator==(const SnapshotBegin&) const = default;
+  };
+struct SnapshotChunk {
+  uint64_t offset = 0;
+  Bytes data;
+  bool operator==(const SnapshotChunk&) const = default;
+  };
+struct SnapshotEnd { bool operator==(const SnapshotEnd&) const = default; };
+struct SnapshotReady { bool operator==(const SnapshotReady&) const = default; };
+
+using Payload = std::variant<Hello,Welcome,Input,StateAck,Reject,Accepted,
+                             SnapshotBegin,SnapshotChunk,SnapshotEnd,SnapshotReady>;
 
 struct Message {
   uint64_t generation = 0;

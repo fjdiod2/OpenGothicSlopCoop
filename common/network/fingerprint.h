@@ -15,6 +15,7 @@ struct FingerprintInputs {
 
 // SHA-256 through macOS CommonCrypto; no timestamp/size-only compatibility cache.
 Fingerprint hashFile(const std::filesystem::path& file, const std::atomic_bool& cancel);
+Fingerprint hashBytes(std::span<const uint8_t> bytes);
 Hello fingerprint(const FingerprintInputs& inputs, const std::atomic_bool& cancel);
 std::string hexFingerprint(const Fingerprint& value);
 std::filesystem::path executablePath();

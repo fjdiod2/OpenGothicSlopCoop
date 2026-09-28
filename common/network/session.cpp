@@ -1,4 +1,5 @@
 #include "session.h"
+#include "fingerprint.h"
 #include "game/playeridentity.h"
 
 #include <algorithm>
@@ -82,6 +83,7 @@ struct Session::Impl {
   NetworkStatus state;
   Hello identity;
   uint64_t nextGeneration = 0;
+  uint64_t now = 0;
 #ifndef _WIN32
   struct Peer {
     enum Stage { Connecting, Handshake, AcceptedSending, Connected, Closing } stage = Handshake;
@@ -91,10 +93,20 @@ struct Session::Impl {
     uint64_t started = 0;
     uint64_t generation = 0;
     bool bound = false;
+    enum Transfer { None, Sending, Receiving, Available, Loading, AwaitReady, Ready } transfer = None;
+    Bytes snapshot;
+    uint64_t revision = 0, total = 0, offset = 0, deadline = 0;
+    Fingerprint digest = {};
     explicit Peer(int fd, uint64_t now):socket(fd),started(now) {}
     };
   std::unique_ptr<Socket> listener;
   std::vector<std::unique_ptr<Peer>> peers;
+
+  void resetSnapshot() {
+    state.snapshotState = "none";
+    state.snapshotRevision = state.snapshotBytes = state.snapshotTransferred = 0;
+    state.snapshotDigest = {};
+    }
 
   void event(const std::string& reason) {
     state.reason = reason;
@@ -137,6 +149,60 @@ struct Session::Impl {
     }
 
   bool receiveMessage(Peer& peer, const Message& message, uint64_t now) {
+    const auto type = messageType(message);
+    if(type==MessageType::SnapshotBegin || type==MessageType::SnapshotChunk ||
+       type==MessageType::SnapshotEnd || type==MessageType::SnapshotReady) {
+      if(peer.stage!=Peer::Connected || !peer.bound || message.generation!=peer.generation ||
+         message.player!=PlayerIdentity::Companion) {
+        event("invalid_snapshot"); return false;
+        }
+      if(state.role==Role::Host) {
+        if(type!=MessageType::SnapshotReady || peer.transfer!=Peer::AwaitReady || message.revision!=peer.revision) {
+          event("invalid_snapshot"); return false;
+          }
+        peer.transfer = Peer::Ready;
+        state.snapshotState = "ready";
+        event("snapshot_ready");
+        return true;
+        }
+      if(auto begin = std::get_if<SnapshotBegin>(&message.payload)) {
+        if(peer.transfer!=Peer::None) { event("invalid_snapshot"); return false; }
+        peer.transfer = Peer::Receiving;
+        peer.revision = message.revision;
+        peer.total = begin->bytes;
+        peer.digest = begin->digest;
+        peer.deadline = now+SnapshotTimeoutMs;
+        // Allocate only bytes actually received; a declaration alone cannot
+        // reserve the maximum-sized snapshot. The completed archive is bounded.
+        state.snapshotState = "receiving";
+        state.snapshotRevision = peer.revision;
+        state.snapshotBytes = peer.total;
+        state.snapshotDigest = peer.digest;
+        event("snapshot_begin");
+        return true;
+        }
+      if(peer.transfer!=Peer::Receiving || message.revision!=peer.revision) {
+        event("invalid_snapshot"); return false;
+        }
+      if(auto chunk = std::get_if<SnapshotChunk>(&message.payload)) {
+        if(chunk->offset!=peer.snapshot.size() || chunk->data.size()>peer.total-peer.snapshot.size()) {
+          event("invalid_snapshot_offset"); return false;
+          }
+        const auto needed = peer.snapshot.size()+chunk->data.size();
+        if(needed>peer.snapshot.capacity())
+          peer.snapshot.reserve(std::min(size_t(peer.total),std::max(needed,peer.snapshot.capacity()*2)));
+        peer.snapshot.insert(peer.snapshot.end(),chunk->data.begin(),chunk->data.end());
+        state.snapshotTransferred = peer.snapshot.size();
+        return true;
+        }
+      if(type!=MessageType::SnapshotEnd || peer.snapshot.size()!=peer.total || hashBytes(peer.snapshot)!=peer.digest) {
+        event("invalid_snapshot_digest"); return false;
+        }
+      peer.transfer = Peer::Available;
+      state.snapshotState = "received";
+      event("snapshot_received");
+      return true;
+      }
     if(peer.stage==Peer::Connected && state.role==Role::Guest &&
        std::holds_alternative<Welcome>(message.payload)) {
       if(peer.bound || message.generation!=peer.generation ||
@@ -202,6 +268,11 @@ struct Session::Impl {
     }
 
   bool pump(Peer& peer, uint64_t now) {
+    if(peer.transfer!=Peer::None && peer.transfer!=Peer::Ready && now>=peer.deadline) {
+      ++state.timeouts;
+      event("snapshot_timeout");
+      return false;
+      }
     if(peer.stage!=Peer::Connected && now-peer.started>=HandshakeTimeoutMs) {
       ++state.timeouts;
       event("timeout");
@@ -226,7 +297,7 @@ struct Session::Impl {
       state.state = "handshaking";
       }
     // Bound work per frame even if a local peer continuously writes.
-    std::array<uint8_t,4096> buffer;
+    std::array<uint8_t,16384> buffer;
     for(size_t calls=0; calls<4 && peer.stage!=Peer::Closing; ++calls) {
       const auto count = ::recv(peer.socket.fd,buffer.data(),buffer.size(),0);
       if(count<0) {
@@ -257,6 +328,23 @@ struct Session::Impl {
           }
         }
       }
+    if(peer.transfer==Peer::Sending) {
+      for(size_t n=0; n<4 && peer.output.pendingBytes()<128*1024; ++n) {
+        if(peer.offset==peer.total) {
+          if(!peer.output.enqueue({peer.generation,PlayerIdentity::Companion,0,peer.revision,SnapshotEnd{}})) break;
+          peer.transfer = Peer::AwaitReady;
+          Bytes{}.swap(peer.snapshot);
+          state.snapshotState = "awaiting_ready";
+          break;
+          }
+        const auto count = std::min(uint64_t(SnapshotChunkBytes),peer.total-peer.offset);
+        SnapshotChunk chunk{peer.offset,Bytes(peer.snapshot.begin()+std::ptrdiff_t(peer.offset),
+                                             peer.snapshot.begin()+std::ptrdiff_t(peer.offset+count))};
+        if(!peer.output.enqueue({peer.generation,PlayerIdentity::Companion,0,peer.revision,std::move(chunk)})) break;
+        peer.offset += count;
+        state.snapshotTransferred = peer.offset;
+        }
+      }
     for(size_t calls=0; calls<4 && !peer.output.front().empty(); ++calls) {
       auto bytes = peer.output.front();
 #ifdef MSG_NOSIGNAL
@@ -264,7 +352,7 @@ struct Session::Impl {
 #else
       constexpr int flags = 0;
 #endif
-      const auto count = ::send(peer.socket.fd,bytes.data(),std::min(bytes.size(),size_t(4096)),flags);
+      const auto count = ::send(peer.socket.fd,bytes.data(),std::min(bytes.size(),size_t(16384)),flags);
       if(count<0 && wouldBlock()) break;
       if(count<=0) { event("write_error"); return false; }
       peer.output.consume(size_t(count));
@@ -308,6 +396,62 @@ bool Session::bindCompanion(uint64_t generation) {
   return false;
   }
 
+bool Session::sendSnapshot(uint64_t generation, uint64_t revision, Bytes data) {
+#ifndef _WIN32
+  auto& self = *impl;
+  if(self.state.role!=Role::Host || data.empty() || data.size()>MaxSnapshotBytes || revision==0) return false;
+  for(auto& peer:self.peers) {
+    if(peer->stage!=Impl::Peer::Connected || !peer->bound || peer->generation!=generation || peer->transfer!=Impl::Peer::None) continue;
+    peer->digest = hashBytes(data);
+    if(!peer->output.enqueue({generation,PlayerIdentity::Companion,0,revision,SnapshotBegin{data.size(),peer->digest}})) return false;
+    peer->transfer = Impl::Peer::Sending;
+    peer->revision = revision;
+    peer->total = data.size();
+    peer->snapshot = std::move(data);
+    // The application calls this immediately after tick(); use that clock.
+    peer->deadline = self.now+SnapshotTimeoutMs;
+    self.state.snapshotState = "sending";
+    self.state.snapshotRevision = revision;
+    self.state.snapshotBytes = peer->total;
+    self.state.snapshotDigest = peer->digest;
+    self.event("snapshot_sending");
+    return true;
+    }
+#else
+  (void)generation; (void)revision; (void)data;
+#endif
+  return false;
+  }
+
+std::optional<Snapshot> Session::takeSnapshot() {
+#ifndef _WIN32
+  for(auto& peer:impl->peers) {
+    if(peer->transfer!=Impl::Peer::Available) continue;
+    peer->transfer = Impl::Peer::Loading;
+    impl->state.snapshotState = "loading";
+    return Snapshot{peer->generation,peer->revision,std::move(peer->snapshot)};
+    }
+#endif
+  return {};
+  }
+
+bool Session::snapshotLoaded(uint64_t generation, uint64_t revision) {
+#ifndef _WIN32
+  if(impl->state.role!=Role::Guest) return false;
+  for(auto& peer:impl->peers) {
+    if(peer->transfer!=Impl::Peer::Loading || peer->generation!=generation || peer->revision!=revision) continue;
+    if(!peer->output.enqueue({generation,PlayerIdentity::Companion,0,revision,SnapshotReady{}})) return false;
+    peer->transfer = Impl::Peer::Ready;
+    impl->state.snapshotState = "ready";
+    impl->event("snapshot_loaded");
+    return true;
+    }
+#else
+  (void)generation; (void)revision;
+#endif
+  return false;
+  }
+
 void Session::invalidate(const std::string& reason) {
 #ifndef _WIN32
   auto& self = *impl;
@@ -315,6 +459,7 @@ void Session::invalidate(const std::string& reason) {
   for(const auto& peer:self.peers)
     if(peer->stage==Impl::Peer::Connected) ++self.state.disconnected;
   self.peers.clear();
+  self.resetSnapshot();
   self.state.peers = 0;
   self.state.generation = self.state.boundPlayer = self.state.bindingRevision = 0;
   self.state.state = self.listener ? "listening" : "disconnected";
@@ -381,6 +526,7 @@ void Session::start(Endpoint endpoint, const Hello& identity, uint64_t now) {
 void Session::tick(uint64_t now) {
 #ifndef _WIN32
   auto& self = *impl;
+  self.now = now;
   try {
     if(self.listener) self.acceptPeers(now);
     for(size_t i=0; i<self.peers.size();) {
@@ -391,6 +537,7 @@ void Session::tick(uint64_t now) {
       if(connected) {
         ++self.state.disconnected;
         self.state.boundPlayer = self.state.bindingRevision = 0;
+        self.resetSnapshot();
         }
       self.peers.erase(self.peers.begin()+std::ptrdiff_t(i));
       if(self.state.role==Role::Guest && self.state.state!="rejected")
@@ -406,6 +553,7 @@ void Session::tick(uint64_t now) {
   catch(const std::exception& error) {
     self.peers.clear();
     self.listener.reset();
+    self.resetSnapshot();
     self.state.state = "failed";
     self.state.peers = 0;
     self.state.generation = self.state.boundPlayer = self.state.bindingRevision = 0;

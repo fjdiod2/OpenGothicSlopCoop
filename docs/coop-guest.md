@@ -1,10 +1,9 @@
-# Guest authority (N07)
+# Guest authority (N07–N08)
 
 The campaign is simulated and saved by the host. `-coop-join 127.0.0.1:PORT`
 selects guest mode for the process, including before a world exists and after
 connection refusal, timeout or disconnect. The guest does not become a host if
-its connection fails. Wire protocol version 2 and checkpoint version 56 are
-unchanged by this task.
+its connection fails. N08 uses wire version 3 and checkpoint version 56.
 
 ## Loading
 
@@ -25,15 +24,17 @@ The separate visual/resource VMs still load rendering, camera and sound data.
 
 Saved variables, quests, perceptions, NPCs, inventories, world items, triggers
 and identity tables are restored. Startup/world initialization and a legacy
-perception fallback cannot execute campaign functions. N08 must construct its
+perception fallback cannot execute campaign functions. N08 constructs its
 received snapshot with **Guest** authority explicitly; the default checkpoint
 constructor remains authoritative for ordinary single-player/host loads.
 
-`-save 99 -coop-join ...` currently loads an explicitly supplied local checkpoint
-as a guest. This is a development fixture, not network snapshot transfer. The
-test runner copies a committed host checkpoint between its isolated directories.
-The guest's `ready` diagnostic means the local fixture loaded; it does not claim
-network synchronization or acknowledge a host revision.
+The normal join path receives a checksum-verified host checkpoint over TCP,
+loads it directly from memory, selects companion ID 2, and acknowledges readiness.
+The host holds simulation during this barrier. Incomplete transfers never reach
+the loader, and a load finishing after cancellation is discarded before display.
+See [snapshot protocol](coop-protocol.md#initial-snapshot-and-readiness-barrier-n08).
+`-save 99 -coop-join ...` may still load a local development fixture with guest
+authority, but only the received host snapshot can acknowledge a network revision.
 
 ## Simulation and presentation
 
@@ -73,8 +74,8 @@ python3 tools/run-gothic-tests.py --scenario guest-isolation
 
 The test connects an empty guest, verifies that requesting a new game still
 leaves it empty, prepares two host actors, a plant, distinct companion HP and
-quest/global markers, holds host simulation, then saves and loads a copied
-checkpoint in the guest. It compares saved quest/perception data, every mutable
+quest/global markers, holds host simulation, then transfers the host snapshot
+into the guest. A local checkpoint is retained only to detect unauthorized saves. It compares saved quest/perception data, every mutable
 script variable and every resolvable instance reference. Existing loader
 normalization of unresolved pointers and ZenKit's synthetic argument scratch
 string is handled explicitly; no actual script globals are omitted.
@@ -92,6 +93,6 @@ are not loadable guest checkpoints.
 
 This verifies the fixture and the engine's current runtime entry points. Full
 campaign event replication, dialogue ownership, input routing, joint region
-travel and network snapshot loading remain later tasks. Screenshots, detailed
+travel remain later tasks. Screenshots, detailed
 states, per-entry hashes, logs and cleanup evidence are retained by the runner;
 the parent `TESTING.md` records completed runs.
