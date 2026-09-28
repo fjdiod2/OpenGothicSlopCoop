@@ -395,8 +395,43 @@ Wire version 4 and checkpoint version 56 are unchanged.
 The `disconnect-held` integration scenario kills the guest during forward/turn
 input while the host also moves, then verifies idle companion state and an offline
 checkpoint after full host restart. The asset-free `input-disconnect` case leaves
-unapplied input queued at socket closure and requires its removal. Fresh rejoin and
-coordinated save/load acceptance remain N12–N14.
+unapplied input queued at socket closure and requires its removal.
+
+### Rejoining the same companion (N12)
+
+A guest with a disconnected, failed or rejected connection can press **R** to
+retry the original `-coop-join` endpoint. The window displays this action after
+the loader releases ownership. The reconnect action is unavailable on a healthy
+or in-progress connection, on the host, and while loading. A fresh guest process
+can also join normally.
+There is no automatic retry loop or endpoint change. Executable/data fingerprints
+remain the startup values; changing either still requires process restart.
+
+Retry destroys the old transport, decoder, pending input/pose/ack queues, held
+buttons and mouse deltas, interpolation target and snapshot metadata. Any old
+world stays read-only while connecting and transferring. A fresh checksum-verified
+snapshot replaces it through the guest-authority loader, then companion ID 2 is
+selected before readiness is acknowledged. Input remains disabled until then.
+The host resolves its existing companion; it does not spawn/reset another actor.
+Its current world, including changes while the guest was absent, becomes the
+snapshot. Each accepted join gets a new nonzero host generation; input restarts
+at sequence 1, snapshot revision 1, and pose revision 2.
+
+Old-generation input is ignored/counted without consuming a new input sequence.
+Old-generation pose, input-ack or snapshot messages fail the new guest session
+before application. Queues belonging to a closed connection cannot be drained
+by a new connection, and old load completion cannot acknowledge a new generation.
+This is session consistency, not authentication: the current prototype accepts
+one compatible local guest and always assigns the existing companion to it.
+
+`rejoin-companion` kills a moving guest, moves the host while absent, then compares
+a fresh snapshot's identities, inventory/health and poses. A test-owned TCP relay
+inserts old input and poses into the real sockets; old input has no effect and an
+old pose disconnects before either actor changes. The same guest process then
+uses ordinary R input to rejoin again and resume movement. Asset-free
+`rejoin-queues` / `rejoin-stale` cover undrained host input/guest poses, unsent
+bytes, a changed snapshot and obsolete acknowledgements across connection reuse.
+Coordinated save/load boundaries remain N13–N14. Wire/checkpoint versions stay 4/56.
 
 ## Starting and observing a connection
 
@@ -453,6 +488,7 @@ reset with the generation. N10 adds `poses_sent`, `poses_received`, `poses_appli
 `poses_applied` is the last exact displayed endpoint, while `pose_tick` describes
 the most recent sent/received target. `snapshot_state == "ready"` reports snapshot
 activation (guest) or receipt of that acknowledgement (host).
+N12 adds `can_rejoin`, which matches availability of the ordinary R-key action.
 
 ## Exact compatibility fingerprint inputs
 
@@ -571,7 +607,7 @@ Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
 assets, start a GUI, or require initialized engine submodules. It runs 13 codec
 cases plus four object-registry and two interpolation cases everywhere, and
-fourteen connection/fingerprint cases on macOS (33 total); the latter use
+sixteen connection/fingerprint cases on macOS (35 total); the latter use
 loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh

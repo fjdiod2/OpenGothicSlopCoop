@@ -41,6 +41,28 @@ void MainWindow::initNetwork() {
     }
   }
 
+bool MainWindow::canRejoinNetwork() const {
+  const auto& status = network.status();
+  return status.role==Coop::Role::Guest && networkPreparation.empty() && !networkLoading &&
+         Gothic::inst().checkLoading()==Gothic::LoadState::Idle &&
+         (status.state=="disconnected" || status.state=="failed" || status.state=="rejected");
+  }
+
+void MainWindow::rejoinNetwork() {
+  if(!canRejoinNetwork()) return;
+  clearInput();
+  dMouse = Tempest::Point();
+  remoteButtons = 0;
+  networkInstalledInput = networkControlGeneration = 0;
+  networkInterpolation.reset();
+  networkLoadGeneration = networkLoadRevision = networkSnapshotTick = 0;
+  networkSnapshotArtifact.clear();
+  loadStatus = "none";
+  // start() destroys every old socket, decoder, pending input/pose and ack.
+  // Keep the old world read-only until a fresh verified snapshot replaces it.
+  network.start(CommandLine::inst().coopEndpoint(),networkIdentity,Tempest::Application::tickCount());
+  }
+
 void MainWindow::tickNetwork() {
   if(fingerprintJob.valid() && fingerprintJob.wait_for(std::chrono::seconds(0))==std::future_status::ready) {
     try {

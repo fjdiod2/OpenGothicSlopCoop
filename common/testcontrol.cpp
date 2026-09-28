@@ -105,6 +105,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("acknowledged_revision"); out.Uint64(net.acknowledgedRevision);
   out.Key("held_buttons"); out.Uint(networkButtons);
   out.Key("remote_buttons"); out.Uint(remoteButtons);
+  out.Key("can_rejoin"); out.Bool(canRejoinNetwork());
   out.Key("poses_sent"); out.Uint64(net.posesSent);
   out.Key("poses_received"); out.Uint64(net.posesReceived);
   out.Key("poses_applied"); out.Uint64(net.posesApplied);
@@ -332,7 +333,9 @@ void MainWindow::pollTestControl() {
       SystemApi::exit();
       return;
       }
-    if(!game.player() && action!="screenshot_ui" && action!="start_game")
+    const bool reconnectKey = game.isGuest() && action=="key" && cmd.HasMember("key") &&
+                              cmd["key"].IsString() && std::string_view(cmd["key"].GetString())=="R";
+    if(!game.player() && action!="screenshot_ui" && action!="start_game" && !reconnectKey)
       throw std::runtime_error("No player is ready");
     if(game.isNetworkPaused() && action!="key" && action!="chord" && action!="hold_keys" && action!="release_keys" && action!="mouse" &&
        action!="screenshot" && action!="screenshot_ui" && action!="campaign_probe" && action!="save")
@@ -376,7 +379,7 @@ void MainWindow::pollTestControl() {
         {"W",Event::K_W}, {"A",Event::K_A}, {"S",Event::K_S}, {"D",Event::K_D},
         {"SPACE",Event::K_Space}, {"CTRL",Event::K_LControl}, {"ALT",Event::K_LAlt},
         {"TAB",Event::K_Tab}, {"ESC",Event::K_ESCAPE}, {"ENTER",Event::K_Return},
-        {"F",Event::K_F}, {"B",Event::K_B}
+        {"F",Event::K_F}, {"B",Event::K_B}, {"R",Event::K_R}
         };
       for(auto name:names) {
         auto found = Event::K_NoKey;

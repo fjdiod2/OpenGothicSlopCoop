@@ -535,6 +535,87 @@ void posesRoundtrip() {
   pump(host,guest,[&] { return host.status().posesAcknowledged==3; });
   }
 
+void rejoinQueues() {
+  Session host, guest;
+  host.start({Role::Host,0},identity(),0);
+  guest.start({Role::Guest,host.status().port},identity(),0);
+  pump(host,guest,[&] { return host.status().state=="connected"; });
+  const auto old = host.status().generation;
+  REQUIRE(host.bindCompanion(old) && host.sendSnapshot(old,1,Bytes{7}));
+  pump(host,guest,[&] { return guest.status().snapshotState=="received"; });
+  REQUIRE(guest.takeSnapshot() && guest.snapshotLoaded(old,1));
+  pump(host,guest,[&] { return host.status().snapshotState=="ready"; });
+  REQUIRE(guest.sendInput({Forward,10,0}));
+  pump(host,guest,[&] { return host.status().inputReceived==1; });
+  // Leave both host input and guest presentation unapplied in their queues.
+  REQUIRE(host.sendPoses(old,2,posesFixture()));
+  pump(host,guest,[&] { return guest.status().posesReceived==2; });
+  REQUIRE(guest.sendInput({TurnRight,100,0})); // Also leave unsent guest bytes.
+  guest.start({Role::Guest,host.status().port},identity(),2);
+  pump(host,guest,[&] { return host.status().accepted==2 && guest.status().state=="connected"; },3);
+  const auto generation = host.status().generation;
+  REQUIRE(generation!=old && generation!=0 && guest.status().generation==generation);
+  REQUIRE(!host.takeInput() && !guest.takePoses());
+  REQUIRE(host.status().inputReceived==0 && guest.status().inputSent==0 && guest.status().posesReceived==0);
+  REQUIRE(!guest.snapshotLoaded(old,1) && !guest.posesApplied(old,2));
+  REQUIRE(!host.inputApplied(old,1,2) && !host.sendPoses(old,2,posesFixture()));
+  REQUIRE(host.bindCompanion(generation) && host.sendSnapshot(generation,1,Bytes{8,9}));
+  pump(host,guest,[&] { return guest.status().snapshotState=="received"; },4);
+  REQUIRE(!guest.sendInput({Forward,0,0}));
+  const auto snapshot = guest.takeSnapshot();
+  REQUIRE(snapshot && snapshot->generation==generation && snapshot->data==Bytes({8,9}));
+  REQUIRE(guest.snapshotLoaded(generation,1));
+  pump(host,guest,[&] { return host.status().snapshotState=="ready"; },5);
+  REQUIRE(guest.sendInput({0,0,0}));
+  pump(host,guest,[&] { return host.status().inputReceived==1; },6);
+  const auto input = host.takeInput();
+  REQUIRE(input && input->generation==generation && input->sequence==1 && std::get<Input>(input->payload).buttons==0);
+  REQUIRE(host.inputApplied(generation,1,2));
+  REQUIRE(host.sendPoses(generation,2,posesFixture(100,1)));
+  pump(host,guest,[&] { return guest.status().posesReceived==2; },7);
+  const auto pose = guest.takePoses();
+  REQUIRE(pose && pose->generation==generation && guest.status().inputAcknowledged==1);
+  REQUIRE(guest.posesApplied(generation,2));
+  pump(host,guest,[&] { return host.status().posesAcknowledged==2; },8);
+  }
+
+void rejoinStale() {
+  Session idle, guest;
+  // Reuse one guest Session across old and fresh host generations. Inject old
+  // poses/acks after the fresh snapshot; no old application work may escape.
+  for(bool stalePose:{true,false}) {
+    Socket server;
+    const auto port = server.listen();
+    for(uint64_t generation:{uint64_t(12),uint64_t(13)}) {
+      guest.start({Role::Guest,port},identity(),0);
+      guest.tick(1);
+      Socket peer;
+      ::close(peer.fd);
+      peer.fd = ::accept(server.fd,nullptr,nullptr);
+      REQUIRE(peer.fd>=0);
+      sendMessage(peer,{generation,0,0,0,Accepted{identity()}});
+      sendMessage(peer,{generation,2,0,1,Welcome{}});
+      sendMessage(peer,{generation,2,0,1,SnapshotBegin{1,hashBytes(Bytes{7})}});
+      sendMessage(peer,{generation,2,0,1,SnapshotChunk{0,Bytes{7}}});
+      sendMessage(peer,{generation,2,0,1,SnapshotEnd{}});
+      pump(idle,guest,[&] { return guest.status().snapshotState=="received"; });
+      REQUIRE(guest.takeSnapshot() && guest.snapshotLoaded(generation,1));
+      if(generation==12) {
+        sendMessage(peer,{12,2,0,2,posesFixture()});
+        pump(idle,guest,[&] { return guest.status().posesReceived==2; });
+        }
+      else {
+        REQUIRE(!guest.takePoses());
+        if(stalePose) sendMessage(peer,{12,2,0,2,posesFixture()});
+        else          sendMessage(peer,{12,2,0,2,StateAck{0}});
+        pump(idle,guest,[&] { return guest.status().state=="disconnected"; });
+        REQUIRE(!guest.takePoses() && guest.status().posesApplied==0 && guest.status().inputAcknowledged==0);
+        REQUIRE(guest.status().reason==(stalePose ? "invalid_pose_session" : "invalid_input_ack"));
+        }
+      }
+    }
+  }
+
 void posesValidation() {
   Session idle, guest;
   for(int fault=0; fault<7; ++fault) {
@@ -670,6 +751,8 @@ int main(int argc, char** argv) {
     else if(name=="input-disconnect") inputDisconnect();
     else if(name=="poses-roundtrip") posesRoundtrip();
     else if(name=="poses-validation") posesValidation();
+    else if(name=="rejoin-queues") rejoinQueues();
+    else if(name=="rejoin-stale") rejoinStale();
     else throw std::runtime_error("Unknown connection test");
     std::cout << "PASS: " << name << '\n';
     return 0;

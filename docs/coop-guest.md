@@ -1,4 +1,4 @@
-# Guest authority (N07–N10)
+# Guest authority (N07–N12)
 
 The campaign is simulated and saved by the host. `-coop-join 127.0.0.1:PORT`
 selects guest mode for the process, including before a world exists and after
@@ -70,6 +70,13 @@ ownership boundary, not a security sandbox for arbitrary native code or mods.
 Normal guest saves return `denied_guest`; the session serializer also refuses
 them. A guest cannot overwrite a host checkpoint or start a fresh campaign.
 Host saving and gameplay retain their existing paths.
+
+After connection loss the guest remains read-only. Press **R** when the reconnect
+prompt appears to retry the original host without restarting the window. The
+old view can remain visible during transfer; controls return only after loading
+and acknowledging a fresh host snapshot. Held keys/mouse impulses, pose blending
+and old transport queues are discarded. The existing companion and inventory
+come from the current host world. See [rejoin protocol](coop-protocol.md#rejoining-the-same-companion-n12).
 
 ## Acceptance test
 

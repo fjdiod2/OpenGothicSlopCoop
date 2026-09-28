@@ -274,9 +274,11 @@ void MainWindow::paintEvent(PaintEvent& event) {
   renderer.dbgDraw(p);
 
   const float scale = Gothic::interfaceScale(this);
-  if(Gothic::inst().isGuest() && world==nullptr && st==Gothic::LoadState::Idle) {
+  if(Gothic::inst().isGuest() && st==Gothic::LoadState::Idle &&
+     (canRejoinNetwork() || network.status().snapshotState!="ready")) {
     auto& fnt = Resources::font(scale);
-    fnt.drawText(p,20,h()-40,"Waiting for the host world");
+    fnt.drawText(p,20,h()-80,canRejoinNetwork() ? "Connection lost. Press R to rejoin" :
+                                               "Waiting for the host world");
     }
   if(Gothic::inst().doFrate() && !Gothic::inst().isDesktop()) {
     char fpsT[64]={};
@@ -424,7 +426,14 @@ void MainWindow::mouseWheelEvent(MouseEvent &event) {
   }
 
 void MainWindow::keyDownEvent(KeyEvent &event) {
-  if(Gothic::inst().isGuest()) { networkKey(event,true); return; }
+  if(Gothic::inst().isGuest()) {
+    if(event.key==Event::K_R && canRejoinNetwork()) {
+      rejoinNetwork();
+      event.accept();
+      }
+    else networkKey(event,true);
+    return;
+    }
   if(Gothic::inst().isNetworkPaused()) return;
   if(video.isActive()){
     event.accept();
