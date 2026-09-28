@@ -116,7 +116,7 @@ GameSession::GameSession(std::string file) {
   // wrld->setDayTime(8,0);
   }
 
-GameSession::GameSession(Serialize &fin) {
+GameSession::GameSession(Serialize &fin, Authority authority) : authority(authority) {
   Gothic::inst().setLoadingProgress(0);
   setupSettings();
 
@@ -138,6 +138,7 @@ GameSession::GameSession(Serialize &fin) {
   std::string    wname;
   fin.setEntry("game/session");
   fin.read(ticks,wrldTime,wrldTimePart,wname);
+  presentationTicks = ticks;
 
   cam.reset(new Camera());
   vm.reset(new GameScript(*this));
@@ -174,6 +175,8 @@ GameSession::~GameSession() {
   }
 
 void GameSession::save(Serialize &fout, std::string_view name, const Pixmap& screen) {
+  if(!isAuthoritative())
+    throw std::runtime_error("Only the host can save the campaign");
   SaveGameHeader hdr;
   hdr.version   = Serialize::Version::Current;
   hdr.name      = name;
@@ -249,6 +252,7 @@ std::unique_ptr<World> GameSession::clearWorld() {
   }
 
 void GameSession::changeWorld(std::string_view world, std::string_view wayPoint) {
+  if(!isAuthoritative()) return;
   if(wrld && wrld->players().size()>1) {
     // Joint transfers must carry both characters before this path can be enabled.
     Gothic::inst().onPrint("Region changes are not available in the co-op prototype");
@@ -305,10 +309,13 @@ void GameSession::updateListenerPos(const Camera::ListenerPos& lpos) {
   }
 
 void GameSession::setTime(gtime t) {
+  if(!isAuthoritative()) return;
   wrldTime = t;
   }
 
 void GameSession::tick(uint64_t dt) {
+  if(!isAuthoritative())
+    return;
   wrld->scaleTime(dt);
 
   // apply ztime multiplyer
@@ -433,6 +440,8 @@ const WorldStateStorage& GameSession::findStorage(std::string_view name) {
   }
 
 void GameSession::updateAnimation(uint64_t dt) {
+  if(!isAuthoritative())
+    presentationTicks += dt;
   if(wrld)
     wrld->updateAnimation(dt);
   }
@@ -487,29 +496,30 @@ bool GameSession::isWorldKnown(std::string_view name) const {
 void GameSession::initPerceptions() {
   // NOTE: world is null at this point and most scrip-api will be prone to crash
   if(vm->hasSymbolName("initPerceptions"))
-    vm->getVm().call_function("initPerceptions");
+    vm->runFunction("initPerceptions");
   }
 
 void GameSession::initScripts(bool firstTime) {
+  if(!isAuthoritative()) return;
   auto wname = wrld->name();
   auto dot   = wname.rfind('.');
   auto name  = (dot==std::string::npos ? wname : wname.substr(0,dot));
 
   if(firstTime) {
     if(vm->hasSymbolName("startup_global"))
-      vm->getVm().call_function("startup_global");
+      vm->runFunction("startup_global");
 
     string_frm startup("startup_", name);
     if(vm->hasSymbolName(startup))
-      vm->getVm().call_function(startup);
+      vm->runFunction(startup);
     }
 
   if(vm->hasSymbolName("init_global"))
-    vm->getVm().call_function("init_global");
+    vm->runFunction("init_global");
 
   string_frm init("init_",name);
   if(vm->hasSymbolName(init))
-    vm->getVm().call_function(init);
+    vm->runFunction(init);
 
   wrld->resetPositionToTA();
   }

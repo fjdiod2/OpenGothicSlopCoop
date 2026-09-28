@@ -131,6 +131,8 @@ class World final {
     void                 scaleTime(uint64_t& dt);
     void                 tick(uint64_t dt);
     uint64_t             tickCount() const;
+    uint64_t             presentationTickCount() const;
+    bool                 isAuthoritative() const;
     void                 setDayTime(int32_t h,int32_t min);
     gtime                time() const;
 

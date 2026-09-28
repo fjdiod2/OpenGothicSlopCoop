@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 2 (N06)
+# Co-op wire protocol, version 2 (N07)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -11,7 +11,7 @@ N04 adds the nonblocking TCP connection and compatibility handshake in
 [`session.cpp`](../common/network/session.cpp), with background fingerprints in
 [`fingerprint.cpp`](../common/network/fingerprint.cpp). Real engines can now
 connect on macOS loopback. N05 binds the host's saved companion to that connection.
-The guest still simulates an independent world: N08 transfers state, and N09
+N07 makes the guest a presentation-only process; N08 transfers state, and N09
 routes input. The codec is shared engine source, not a separate mock protocol
 used only by tests.
 
@@ -26,6 +26,13 @@ changing the wire messages. See [world object identities](coop-objects.md) for
 namespaces, player-role versus NPC identity, tombstones, save-local locators,
 legacy migration and the generation checks required by future snapshot/update
 messages. Runtime array indexes must not become network object references.
+
+N07 does not change any wire fields. A guest without a snapshot waits without
+creating a world. An explicitly loaded checkpoint uses immutable guest authority:
+it can render and animate, but cannot advance the campaign, save it or acquire
+authority on disconnect. See [guest authority](coop-guest.md) for loading,
+clock separation, blocked effects and the acceptance test. `connected` and
+`Welcome` remain transport/binding facts, not snapshot readiness.
 
 ## Encoding and frame header
 
@@ -120,7 +127,7 @@ disconnected with `authority_violation`. Even input naming ID 2 is disabled and
 closes with `unexpected_message` until the later snapshot/readiness work.
 
 Binding does not create an actor in the guest world, switch its local camera or
-route its input. These require N07–N09. The host reports its binding when the
+route its input. These require N08–N09. The host reports its binding when the
 Welcome is queued; the guest reports it only after validating the received frame.
 This is assignment metadata, not a guest readiness acknowledgement.
 

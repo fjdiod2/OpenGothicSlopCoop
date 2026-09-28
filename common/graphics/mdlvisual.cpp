@@ -497,26 +497,29 @@ bool MdlVisual::isUsingTorch() const {
 
 bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force) {
   Pose&    pose      = *skInst;
-  uint64_t tickCount = world.tickCount();
+  uint64_t tickCount = world.presentationTickCount();
   auto     pos3      = Vec3{pos.at(3,0), pos.at(3,1), pos.at(3,2)};
 
-  if(npc!=nullptr && world.isInSfxRange(pos3))
-    pose.processSfx(*npc,tickCount);
-  if(mobsi!=nullptr && world.isInSfxRange(pos3))
-    pose.processSfx(*mobsi,tickCount);
-  if(world.isInPfxRange(pos3))
-    pose.processPfx(*this,world,tickCount);
+  // A replica advances the bone pose only. Animation tags, particles and effects
+  // may call back into gameplay; they belong to the host's simulation clock.
+  if(world.isAuthoritative()) {
+    if(npc!=nullptr && world.isInSfxRange(pos3))
+      pose.processSfx(*npc,tickCount);
+    if(mobsi!=nullptr && world.isInSfxRange(pos3))
+      pose.processSfx(*mobsi,tickCount);
+    if(world.isInPfxRange(pos3))
+      pose.processPfx(*this,world,tickCount);
 
-  for(size_t i=0;i<effects.size();) {
-    if(effects[i].timeUntil<tickCount) {
-      effects[i] = std::move(effects.back());
-      effects.pop_back();
-      } else {
-      effects[i].view.tick(dt);
-      ++i;
+    for(size_t i=0;i<effects.size();) {
+      if(effects[i].timeUntil<tickCount) {
+        effects[i] = std::move(effects.back());
+        effects.pop_back();
+        } else {
+        effects[i].view.tick(dt);
+        ++i;
+        }
       }
     }
-
   solver.update(tickCount);
   pose.setObjectMatrix(pos,false);
   const bool changed = pose.update(tickCount, force);

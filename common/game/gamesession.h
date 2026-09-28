@@ -22,10 +22,11 @@ class GthFont;
 
 class GameSession final {
   public:
+    enum class Authority { Campaign, Guest };
     GameSession()=delete;
     GameSession(const GameSession&)=delete;
     GameSession(std::string file);
-    GameSession(Serialize&  fin);
+    GameSession(Serialize& fin, Authority authority = Authority::Campaign);
     ~GameSession();
 
     void         save(Serialize& fout, std::string_view name, const Tempest::Pixmap &screen);
@@ -57,6 +58,8 @@ class GameSession final {
     void         setTime(gtime t);
     void         tick(uint64_t dt);
     uint64_t     tickCount() const { return ticks; }
+    bool         isAuthoritative() const { return authority==Authority::Campaign; }
+    uint64_t     presentationTickCount() const { return isAuthoritative() ? ticks : presentationTicks; }
 
     void         setTimeMultiplyer(float t);
 
@@ -91,6 +94,8 @@ class GameSession final {
     auto         implChangeWorld(std::unique_ptr<GameSession> &&game, std::string_view world, std::string_view wayPoint) -> std::unique_ptr<GameSession>;
     auto         findStorage(std::string_view name) -> const WorldStateStorage&;
 
+    const Authority               authority = Authority::Campaign;
+    uint64_t                      presentationTicks = 0;
     Tempest::SoundDevice           sound;
 
     std::unique_ptr<Camera>        cam;

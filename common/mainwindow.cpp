@@ -86,6 +86,9 @@ MainWindow::MainWindow(Device& device)
     Gothic::inst().load(Gothic::inst().defaultSave());
     rootMenu.popMenu();
     }
+  else if(Gothic::inst().isGuest()) {
+    rootMenu.popMenu(); // Wait for a host snapshot; never construct a new campaign.
+    }
   else if(!CommandLine::inst().doStartMenu()) {
     startGame(Gothic::inst().defaultWorld());
     rootMenu.popMenu();
@@ -271,6 +274,10 @@ void MainWindow::paintEvent(PaintEvent& event) {
   renderer.dbgDraw(p);
 
   const float scale = Gothic::interfaceScale(this);
+  if(Gothic::inst().isGuest() && world==nullptr && st==Gothic::LoadState::Idle) {
+    auto& fnt = Resources::font(scale);
+    fnt.drawText(p,20,h()-40,"Waiting for the host world");
+    }
   if(Gothic::inst().doFrate() && !Gothic::inst().isDesktop()) {
     char fpsT[64]={};
     std::snprintf(fpsT,sizeof(fpsT),"fps = %.2f",fps.get());
@@ -414,6 +421,7 @@ void MainWindow::mouseWheelEvent(MouseEvent &event) {
   }
 
 void MainWindow::keyDownEvent(KeyEvent &event) {
+  if(Gothic::inst().isGuest()) return;
   if(video.isActive()){
     event.accept();
     video.keyDownEvent(event);
@@ -511,6 +519,7 @@ void MainWindow::keyRepeatEvent(KeyEvent& event) {
   }
 
 void MainWindow::keyUpEvent(KeyEvent &event) {
+  if(Gothic::inst().isGuest()) return;
   if(uiKeyUp==&video){
     video.keyUpEvent(event);
     if(event.isAccepted())
@@ -797,6 +806,7 @@ void MainWindow::isDialogClosed(bool& ret) {
 
 template<Tempest::KeyEvent::KeyType k>
 void MainWindow::onMarvinKey() {
+  if(Gothic::inst().isGuest()) return;
   switch(k) {
     case Event::K_F2:
       if(Gothic::inst().isMarvinEnabled()) {
@@ -936,6 +946,12 @@ uint64_t MainWindow::tick() {
     return 0;
     }
 
+  if(Gothic::inst().isGuest()) {
+    tickMouse(dt);
+    update();
+    return dt;
+    }
+
   dialogs.tick(dt);
   inventory.tick(dt);
   Gothic::inst().tick(dt);
@@ -992,7 +1008,7 @@ void MainWindow::tickCamera(uint64_t dt) {
       }
     else if(pl!=nullptr && !camera.isFree()) {
       auto spin = camera.spin();
-      if(pl->interactive()==nullptr && !pl->isDown())
+      if(!Gothic::inst().isGuest() && pl->interactive()==nullptr && !pl->isDown())
         spin.y = pl->rotation();
       if(pl->isDive() && !camera.isMarvin())
         spin.x = -pl->rotationY();
@@ -1057,6 +1073,7 @@ Camera::Mode MainWindow::solveCameraMode() const {
   }
 
 void MainWindow::startGame(std::string_view slot) {
+  if(Gothic::inst().isGuest()) return;
   // gothic.emitGlobalSound(gothic.loadSoundFx("NEWGAME"));
   loadStatus = "pending";
 
@@ -1085,7 +1102,7 @@ void MainWindow::loadGame(std::string_view slot) {
     game = nullptr; // clear world-memory now
     Tempest::RFile file(slot);
     Serialize      s(file);
-    std::unique_ptr<GameSession> w(new GameSession(s));
+    std::unique_ptr<GameSession> w(new GameSession(s, Gothic::inst().isGuest() ? GameSession::Authority::Guest : GameSession::Authority::Campaign));
     return w;
     });
 
@@ -1094,6 +1111,10 @@ void MainWindow::loadGame(std::string_view slot) {
   }
 
 void MainWindow::saveGame(std::string_view slot, std::string_view name) {
+  if(Gothic::inst().isGuest()) {
+    saveStatus = "denied_guest";
+    return;
+    }
   if(dialogs.isActive())
     return;
   if(auto w = Gothic::inst().world(); w!=nullptr && w->currentCs()!=nullptr)
@@ -1227,7 +1248,7 @@ void MainWindow::onWorldLoaded() {
   if(auto pl = Gothic::inst().localPlayer())
     rootMenu.setPlayer(*pl);
 
-  if(auto pl = Gothic::inst().localPlayer())
+  if(auto pl = Gothic::inst().localPlayer(); pl && !Gothic::inst().isGuest())
     pl->multSpeed(1.f);
   lastTick = Application::tickCount();
   player.clearFocus();
@@ -1418,16 +1439,15 @@ void MainWindow::render(){
     }
     sync = device.submit(cmd);
     device.present(swapchain);
+    ++renderedFrames;
     cmdId = (cmdId+1u)%Resources::MaxFramesInFlight;
 
     auto t = Application::tickCount();
-    if(t-time<16 && !Gothic::inst().isInGame() && !video.isActive()) {
-      uint32_t delay = uint32_t(16-(t-time));
-      Application::sleep(delay);
-      t += delay;
-      }
-    else if(maxFpsInv>0 && t-time<maxFpsInv) {
-      uint32_t delay = uint32_t(maxFpsInv-(t-time));
+    // Menus and an empty guest must also honor a configured low-power FPS cap.
+    const auto frameInterval = !Gothic::inst().isInGame() && !video.isActive()
+                                 ? std::max<uint64_t>(16,maxFpsInv) : maxFpsInv;
+    if(frameInterval>0 && t-time<frameInterval) {
+      uint32_t delay = uint32_t(frameInterval-(t-time));
       Application::sleep(delay);
       t += delay;
       }

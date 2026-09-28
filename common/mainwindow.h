@@ -160,6 +160,7 @@ class MainWindow : public Tempest::Window {
     Tempest::Fence         fence   [Resources::MaxFramesInFlight];
     Tempest::CommandBuffer commands[Resources::MaxFramesInFlight];
     uint8_t                cmdId = 0;
+    uint64_t               renderedFrames = 0;
 
     Tempest::Texture2d        background;
     const Tempest::Texture2d* loadBox=nullptr;

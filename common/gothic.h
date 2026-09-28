@@ -71,6 +71,7 @@ class Gothic final {
     auto         version() const -> const VersionInfo&;
 
     bool         isInGame() const;
+    bool         isGuest() const;
     bool         isInGameAndAlive() const;
 
     std::string_view defaultWorld()       const;

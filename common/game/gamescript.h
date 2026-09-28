@@ -77,6 +77,10 @@ class GameScript final {
 
     inline auto& getVm() { return vm; }
     auto         questLog() const -> const QuestLog&;
+    // Campaign quest mutations; also exercised by the development control probe.
+    void log_createtopic     (std::string_view topicName, int section);
+    void log_settopicstatus  (std::string_view topicName, int status);
+    void log_addentry        (std::string_view topicName, std::string_view entry);
 
     const World& world() const;
     World&       world();
@@ -112,6 +116,18 @@ class GameScript final {
     zenkit::DaedalusSymbol*     findSymbol(const size_t s);
     size_t                      findSymbolIndex(std::string_view s);
     size_t                      symbolsCount() const;
+
+    bool                        isAuthoritative() const;
+    uint64_t                    functionCalls() const { return scriptFunctionCalls; }
+    // All campaign function entry points (including triggers/startup) use this
+    // gate. The raw VM remains available for allocating/restoring saved records.
+    template<class R = zenkit::IgnoreReturnValue, class S, class... P>
+    R runFunction(const S& symbol, P... args) {
+      if(!isAuthoritative())
+        return R();
+      ++scriptFunctionCalls;
+      return vm.call_function<R>(symbol, args...);
+      }
 
     const AiState&              aiState  (ScriptFn id);
     const zenkit::ISpell&       spellDesc(int32_t splId);
@@ -174,6 +190,7 @@ class GameScript final {
     void      eventPlayAni(Npc& npc, std::string_view ani);
 
   private:
+    uint64_t scriptFunctionCalls = 0;
     template<typename T>
     struct DetermineSignature {
       using signature = void();
@@ -201,7 +218,11 @@ class GameScript final {
     template <class F>
     void bindExternal(const std::string& name, F function) {
       vm.register_external(name, std::function<typename DetermineSignature<F>::signature> (
-                                   [this, function](auto ... v) { return (this->*function)(v...); }));
+                                   [this, function](auto ... v) {
+                                     using R = decltype((this->*function)(v...));
+                                     if(!isAuthoritative()) return R();
+                                     return (this->*function)(v...);
+                                     }));
       }
 
     void  initCommon();
@@ -424,10 +445,6 @@ class GameScript final {
     int  mob_hasitems        (std::string_view tag, int item);
 
     void ta_min              (std::shared_ptr<zenkit::INpc> npcRef, int start_h, int start_m, int stop_h, int stop_m, int action, std::string_view waypoint);
-
-    void log_createtopic     (std::string_view topicName, int section);
-    void log_settopicstatus  (std::string_view topicName, int status);
-    void log_addentry        (std::string_view topicName, std::string_view entry);
 
     void equipitem           (std::shared_ptr<zenkit::INpc> npcRef, int cls);
     void createinvitem       (std::shared_ptr<zenkit::INpc> npcRef, int itemInstance);

@@ -12,7 +12,7 @@ TriggerScript::TriggerScript(Vob* parent, World &world, const zenkit::VTriggerSc
 
 void TriggerScript::onTrigger(const TriggerEvent &) {
   try {
-    world.script().getVm().call_function(function);
+    world.script().runFunction(function);
     }
   catch(const std::exception& e){
     Tempest::Log::e("exception in trigger-script: ",e.what());

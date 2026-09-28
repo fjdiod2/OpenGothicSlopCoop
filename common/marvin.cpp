@@ -255,6 +255,7 @@ bool Marvin::autoComplete(std::string& v) {
   }
 
 bool Marvin::exec(std::string_view v) {
+  if(Gothic::inst().isGuest()) return false;
   auto ret = recognize(v);
   switch(ret.cmd.type) {
     case C_None:

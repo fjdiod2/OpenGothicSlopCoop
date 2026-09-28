@@ -5,7 +5,7 @@
 
 class SpellDefinitions final {
   public:
-    SpellDefinitions(zenkit::DaedalusVm &vm);
+    SpellDefinitions(zenkit::DaedalusVm &vm, bool initialize = true);
     ~SpellDefinitions();
 
     const zenkit::ISpell& find(std::string_view instanceName) const;

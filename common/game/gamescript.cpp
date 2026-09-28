@@ -107,6 +107,10 @@ GameScript::~GameScript() {
   Gothic::inst().onSettingsChanged.ubind(this,&GameScript::initSettings);
   }
 
+bool GameScript::isAuthoritative() const {
+  return owner.isAuthoritative();
+  }
+
 void GameScript::initCommon() {
   bindExternal("hlp_random",                     &GameScript::hlp_random);
   bindExternal("hlp_isvalidnpc",                 &GameScript::hlp_isvalidnpc);
@@ -326,7 +330,7 @@ void GameScript::initCommon() {
 
   // vm.validateExternals();
 
-  spells               = std::make_unique<SpellDefinitions>(vm);
+  spells               = std::make_unique<SpellDefinitions>(vm, isAuthoritative());
   svm                  = std::make_unique<SvmDefinitions>(vm);
 
   cFocusNorm           = findFocus("Focus_Normal");
@@ -350,7 +354,7 @@ void GameScript::initCommon() {
   if(owner.version().game==2) {
     auto* currency = vm.find_symbol_by_name("TRADE_CURRENCY_INSTANCE");
     itMi_Gold      = currency!=nullptr ? vm.find_symbol_by_name(currency->get_string()) : nullptr;
-    if(itMi_Gold!=nullptr){ // FIXME
+    if(isAuthoritative() && itMi_Gold!=nullptr){ // FIXME
       auto item = vm.init_instance<zenkit::IItem>(itMi_Gold);
       goldTxt = item->name;
       }
@@ -366,7 +370,7 @@ void GameScript::initCommon() {
     B_RefreshAtInsert = vm.find_symbol_by_name("B_RefreshAtInsert");
     } else {
     itMi_Gold      = vm.find_symbol_by_name("ItMiNugget");
-    if(itMi_Gold!=nullptr) { // FIXME
+    if(isAuthoritative() && itMi_Gold!=nullptr) { // FIXME
       auto item = vm.init_instance<zenkit::IItem>(itMi_Gold);
       goldTxt = item->name;
       }
@@ -389,7 +393,7 @@ void GameScript::initCommon() {
   wld_exchangeguildattitudes("GIL_ATTITUDES");
 
   auto id = vm.find_symbol_by_name("Gil_Values");
-  if(id!=nullptr){
+  if(id!=nullptr && isAuthoritative()){
     cGuildVal = vm.init_instance<zenkit::IGuildValues>(id);
     for(size_t i=0;i<Guild::GIL_PUBLIC;++i){
       cGuildVal->water_depth_knee   [i]=cGuildVal->water_depth_knee   [Guild::GIL_HUMAN];
@@ -426,7 +430,10 @@ void GameScript::initCommon() {
       }
     }
 
-  if(DirectMemory::isRequired(vm))
+  if(!isAuthoritative())
+    cGuildVal = std::make_shared<zenkit::IGuildValues>();
+
+  if(isAuthoritative() && DirectMemory::isRequired(vm))
     dma.reset(new DirectMemory(*this, vm));
   }
 
@@ -440,6 +447,7 @@ void GameScript::initSettings() {
   }
 
 void GameScript::initDialogs() {
+  if(!isAuthoritative()) return;
   loadDialogOU();
 
   dialogsInfo.clear();
@@ -503,6 +511,7 @@ void GameScript::loadDialogOU() {
   }
 
 void GameScript::initializeInstanceNpc(const std::shared_ptr<zenkit::INpc>& npc, size_t instance) {
+  if(!isAuthoritative()) throw std::runtime_error("Guest cannot construct a campaign NPC");
   auto sym = vm.find_symbol_by_index(uint32_t(instance));
 
   if(sym == nullptr) {
@@ -517,12 +526,13 @@ void GameScript::initializeInstanceNpc(const std::shared_ptr<zenkit::INpc>& npc,
     auto* daily_routine = vm.find_symbol_by_index(uint32_t(npc->daily_routine));
 
     if(daily_routine != nullptr) {
-      vm.call_function(daily_routine);
+      runFunction(daily_routine);
       }
     }
   }
 
 void GameScript::initializeInstanceItem(const std::shared_ptr<zenkit::IItem>& item, size_t instance) {
+  if(!isAuthoritative()) throw std::runtime_error("Guest cannot construct a campaign item");
   auto sym = vm.find_symbol_by_index(uint32_t(instance));
 
   if(sym == nullptr) {
@@ -669,7 +679,7 @@ void GameScript::loadPerc(Serialize& fin) {
   fin.read(count);
   if(count!=PERC_Count) {
     if(hasSymbolName("initPerceptions"))
-      vm.call_function("initPerceptions");
+      runFunction("initPerceptions");
     return;
     }
   for(size_t i=0; i<PERC_Count; ++i)
@@ -812,6 +822,7 @@ World &GameScript::world() {
   }
 
 zenkit::IFocus GameScript::findFocus(std::string_view name) {
+  if(!isAuthoritative()) return {};
   auto id = vm.find_symbol_by_name(name);
   if(id==nullptr)
     return {};
@@ -906,7 +917,7 @@ std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zen
       if(info.condition) {
         auto* conditionSymbol = vm.find_symbol_by_index(uint32_t(info.condition));
         if (conditionSymbol != nullptr) {
-          valid = vm.call_function<int>(conditionSymbol) != 0;
+          valid = runFunction<int>(conditionSymbol) != 0;
           }
         }
       if(!valid)
@@ -954,6 +965,7 @@ std::vector<GameScript::DlgChoice> GameScript::updateDialog(const GameScript::Dl
   }
 
 void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
+  if(!isAuthoritative()) return;
   ScopeVar self (*vm.global_self(), npc.handlePtr());
   ScopeVar other(*vm.global_other(), player.handlePtr());
 
@@ -972,7 +984,7 @@ void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
         ++i;
       }
     }
-  vm.call_function(vm.find_symbol_by_index(dlg.scriptFn));
+  runFunction(vm.find_symbol_by_index(dlg.scriptFn));
   }
 
 void GameScript::printCannotUseError(Npc& npc, int32_t atr, int32_t nValue) {
@@ -981,7 +993,7 @@ void GameScript::printCannotUseError(Npc& npc, int32_t atr, int32_t nValue) {
     return;
 
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(id, npc.isPlayer(), atr, nValue);
+  runFunction<void>(id, npc.isPlayer(), atr, nValue);
   }
 
 void GameScript::printCannotCastError(Npc &npc, int32_t plM, int32_t itM) {
@@ -990,7 +1002,7 @@ void GameScript::printCannotCastError(Npc &npc, int32_t plM, int32_t itM) {
     return;
 
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(id, npc.isPlayer(), itM, plM);
+  runFunction<void>(id, npc.isPlayer(), itM, plM);
   }
 
 void GameScript::printCannotBuyError(Npc &npc) {
@@ -998,7 +1010,7 @@ void GameScript::printCannotBuyError(Npc &npc) {
   if(id==nullptr)
     return;
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(id);
+  runFunction<void>(id);
   }
 
 void GameScript::printMobMissingItem(Npc &npc) {
@@ -1009,7 +1021,7 @@ void GameScript::printMobMissingItem(Npc &npc) {
     return;
     }
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(id);
+  runFunction<void>(id);
   }
 
 void GameScript::printMobMissingKey(Npc& npc) {
@@ -1020,7 +1032,7 @@ void GameScript::printMobMissingKey(Npc& npc) {
     return;
     }
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(id);
+  runFunction<void>(id);
   }
 
 void GameScript::printMobAnotherIsUsing(Npc &npc) {
@@ -1031,7 +1043,7 @@ void GameScript::printMobAnotherIsUsing(Npc &npc) {
     return;
     }
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(id);
+  runFunction<void>(id);
   }
 
 void GameScript::printMobMissingKeyOrLockpick(Npc& npc) {
@@ -1042,7 +1054,7 @@ void GameScript::printMobMissingKeyOrLockpick(Npc& npc) {
     return;
     }
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(id);
+  runFunction<void>(id);
   }
 
 void GameScript::printMobMissingLockpick(Npc& npc) {
@@ -1053,7 +1065,7 @@ void GameScript::printMobMissingLockpick(Npc& npc) {
     return;
     }
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(id);
+  runFunction<void>(id);
   }
 
 void GameScript::printMobTooFar(Npc& npc) {
@@ -1063,7 +1075,7 @@ void GameScript::printMobTooFar(Npc& npc) {
     return;
     }
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(id);
+  runFunction<void>(id);
   }
 
 void GameScript::invokeState(const std::shared_ptr<zenkit::INpc>& hnpc, const std::shared_ptr<zenkit::INpc>& oth, const char *name) {
@@ -1073,7 +1085,7 @@ void GameScript::invokeState(const std::shared_ptr<zenkit::INpc>& hnpc, const st
 
   ScopeVar self (*vm.global_self(),  hnpc);
   ScopeVar other(*vm.global_other(), oth);
-  vm.call_function<void>(id);
+  runFunction<void>(id);
   }
 
 int GameScript::invokeState(Npc* npc, Npc* oth, Npc* vic, ScriptFn fn) {
@@ -1101,10 +1113,10 @@ int GameScript::invokeState(Npc* npc, Npc* oth, Npc* vic, ScriptFn fn) {
   auto* sym = vm.find_symbol_by_index(uint32_t(fn.ptr));
   int   ret = 0;
   if(sym!=nullptr && sym->rtype() == zenkit::DaedalusDataType::INT) {
-    ret = vm.call_function<int>(sym);
+    ret = runFunction<int>(sym);
     }
   else if(sym!=nullptr) {
-    vm.call_function<void>(sym);
+    runFunction<void>(sym);
     ret = 0;
     }
 
@@ -1127,7 +1139,7 @@ void GameScript::invokeItem(Npc *npc, ScriptFn fn) {
     return;
 
   ScopeVar self(*vm.global_self(), npc->handlePtr());
-  vm.call_function<void>(functionSymbol);
+  runFunction<void>(functionSymbol);
   }
 
 int GameScript::invokeMana(Npc &npc, Npc* target, int mana) {
@@ -1138,7 +1150,7 @@ int GameScript::invokeMana(Npc &npc, Npc* target, int mana) {
   ScopeVar self (*vm.global_self(),  npc.handlePtr());
   ScopeVar other(*vm.global_other(), target != nullptr ? target->handlePtr() : nullptr);
 
-  return vm.call_function<int>(fn,mana);
+  return runFunction<int>(fn,mana);
   }
 
 int GameScript::invokeManaRelease(Npc &npc, Npc* target, int mana) {
@@ -1149,7 +1161,7 @@ int GameScript::invokeManaRelease(Npc &npc, Npc* target, int mana) {
   ScopeVar self (*vm.global_self(),  npc.handlePtr());
   ScopeVar other(*vm.global_other(), target != nullptr ? target->handlePtr() : nullptr);
 
-  return vm.call_function<int>(fn,mana);
+  return runFunction<int>(fn,mana);
   }
 
 void GameScript::invokeSpell(Npc &npc, Npc* target, Item &it) {
@@ -1166,9 +1178,9 @@ void GameScript::invokeSpell(Npc &npc, Npc* target, Item &it) {
   try {
     if(fn->count()==1) {
       // this is a leveled spell
-      vm.call_function<void>(fn, splLevel);
+      runFunction<void>(fn, splLevel);
       } else {
-      vm.call_function<void>(fn);
+      runFunction<void>(fn);
       }
     }
   catch(...) {
@@ -1183,7 +1195,7 @@ int GameScript::invokeCond(Npc& npc, std::string_view func) {
     return 1;
     }
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  return vm.call_function<int>(fn);
+  return runFunction<int>(fn);
   }
 
 void GameScript::invokePickLock(Npc& npc, int bSuccess, int bBrokenOpen) {
@@ -1191,14 +1203,14 @@ void GameScript::invokePickLock(Npc& npc, int bSuccess, int bBrokenOpen) {
   if(fn==nullptr)
     return;
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(fn, bSuccess, bBrokenOpen);
+  runFunction<void>(fn, bSuccess, bBrokenOpen);
   }
 
 void GameScript::invokeRefreshAtInsert(Npc& npc) {
   if(B_RefreshAtInsert==nullptr || owner.version().game!=2)
     return;
   ScopeVar self(*vm.global_self(), npc.handlePtr());
-  vm.call_function<void>(B_RefreshAtInsert);
+  runFunction<void>(B_RefreshAtInsert);
   }
 
 CollideMask GameScript::canNpcCollideWithSpell(Npc& npc, Npc* shooter, int32_t spellId) {
@@ -1215,7 +1227,7 @@ CollideMask GameScript::canNpcCollideWithSpell(Npc& npc, Npc* shooter, int32_t s
 
   ScopeVar self (*vm.global_self(),  npc.handlePtr());
   ScopeVar other(*vm.global_other(), shooter->handlePtr());
-  return CollideMask(vm.call_function<int>(fn, spellId));
+  return CollideMask(runFunction<int>(fn, spellId));
   }
 
 // Gothic 1 only differentiates between the two worldmap types with and
@@ -1242,7 +1254,7 @@ int GameScript::playerHotKeyScreenMap(Npc& pl) {
     }
 
   ScopeVar self(*vm.global_self(), pl.handlePtr());
-  int map = vm.call_function<int>(fn);
+  int map = runFunction<int>(fn);
   if(map>=0)
     pl.useItem(size_t(map));
   return map;
@@ -1258,7 +1270,7 @@ void GameScript::playerHotLamePotion(Npc& pl) {
     return;
 
   ScopeVar self(*vm.global_self(), pl.handlePtr());
-  vm.call_function<void>(fn);
+  runFunction<void>(fn);
   }
 
 void GameScript::playerHotLameHeal(Npc& pl) {
@@ -1271,7 +1283,7 @@ void GameScript::playerHotLameHeal(Npc& pl) {
     return;
 
   ScopeVar self(*vm.global_self(), pl.handlePtr());
-  vm.call_function<void>(fn);
+  runFunction<void>(fn);
   }
 
 std::string_view GameScript::spellCastAnim(Npc&, Item &it) {
@@ -1319,6 +1331,7 @@ bool GameScript::isAttack(const Npc& pl) const {
   }
 
 std::string_view GameScript::messageFromSvm(std::string_view id, int voice) const {
+  if(!isAuthoritative()) return "";
   return svm->find(id,voice);
   }
 
@@ -1360,7 +1373,7 @@ void GameScript::printNothingToGet() {
     return;
     }
   ScopeVar self(*vm.global_self(), owner.player()->handlePtr());
-  vm.call_function<void>(id);
+  runFunction<void>(id);
   }
 
 void GameScript::useInteractive(const std::shared_ptr<zenkit::INpc>& hnpc, std::string_view func) {
@@ -1370,7 +1383,7 @@ void GameScript::useInteractive(const std::shared_ptr<zenkit::INpc>& hnpc, std::
 
   ScopeVar self(*vm.global_self(),hnpc);
   try {
-    vm.call_function<void>(fn);
+    runFunction<void>(fn);
     }
   catch (...) {
     Log::i("unable to use interactive [",func,"]");
@@ -1470,6 +1483,7 @@ uint64_t GameScript::tickCount() const {
   }
 
 void GameScript::tick(uint64_t dt) {
+  if(!isAuthoritative()) return;
   if(dma!=nullptr)
     dma->tick(dt);
   }
@@ -2542,7 +2556,7 @@ bool GameScript::npc_checkinfo(std::shared_ptr<zenkit::INpc> npcRef, int imp) {
     if(info->condition) {
       auto* conditionSymbol = vm.find_symbol_by_index(uint32_t(info->condition));
       if (conditionSymbol != nullptr)
-        valid = vm.call_function<int>(conditionSymbol)!=0;
+        valid = runFunction<int>(conditionSymbol)!=0;
       }
     if(valid) {
       return true;
@@ -3272,11 +3286,13 @@ void GameScript::ta_min(std::shared_ptr<zenkit::INpc> npcRef, int start_h, int s
   }
 
 void GameScript::log_createtopic(std::string_view topicName, int section) {
+  if(!isAuthoritative()) return;
   if(section==QuestLog::Mission || section==QuestLog::Note)
     quests.add(topicName,QuestLog::Section(section));
   }
 
 void GameScript::log_settopicstatus(std::string_view topicName, int status) {
+  if(!isAuthoritative()) return;
   if(status==int32_t(QuestLog::Status::Running) ||
      status==int32_t(QuestLog::Status::Success) ||
      status==int32_t(QuestLog::Status::Failed ) ||
@@ -3285,6 +3301,7 @@ void GameScript::log_settopicstatus(std::string_view topicName, int status) {
   }
 
 void GameScript::log_addentry(std::string_view topicName, std::string_view entry) {
+  if(!isAuthoritative()) return;
   quests.addEntry(topicName,entry);
   }
 

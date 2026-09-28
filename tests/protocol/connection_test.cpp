@@ -276,6 +276,10 @@ void timeout() {
     idle.push_back(std::move(peer));
     bounded.tick(1);
     }
+  // A completed client connect need not be accept-ready in that same host tick.
+  // Wait for the rejection with a fixed logical clock, without expiring peers.
+  Session unused;
+  pump(bounded,unused,[&] { return bounded.status().reason=="pending_limit"; });
   REQUIRE(bounded.status().peers==Session::MaxPeers);
   REQUIRE(bounded.status().reason=="pending_limit");
   bounded.tick(1+Session::HandshakeTimeoutMs);

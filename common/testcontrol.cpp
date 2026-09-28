@@ -5,6 +5,9 @@
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
 #include "network/fingerprint.h"
+#include "game/gamesession.h"
+#include "world/triggers/abstracttrigger.h"
+#include "game/serialize.h"
 
 #include <Tempest/Application>
 #include <Tempest/Log>
@@ -63,6 +66,10 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("artifact"); str(artifact);
   out.Key("loading"); out.Bool(!idle);
   out.Key("ready"); out.Bool(npc!=nullptr);
+  out.Key("authority"); str(game.isGuest() ? "guest" : "campaign");
+  out.Key("waiting_snapshot"); out.Bool(game.isGuest() && idle && !world && loadStatus!="failed");
+  out.Key("rendered_frames"); out.Uint64(renderedFrames);
+  out.Key("simulation_held"); out.Bool(runtimeMode==R_Suspended);
   out.Key("save_status"); str(saveStatus);
   out.Key("load_status"); str(loadStatus);
   out.Key("dialog"); out.Bool(dialogs.isActive());
@@ -93,6 +100,8 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   if(world) {
     out.Key("world"); str(world->name());
     out.Key("tick"); out.Uint64(world->tickCount());
+    out.Key("presentation_tick"); out.Uint64(world->presentationTickCount());
+    out.Key("script_function_calls"); out.Uint64(world->script().functionCalls());
     out.Key("npc_count"); out.Uint(world->npcCount());
     const auto& registry = world->objectRegistry();
     out.Key("object_registry"); out.StartObject();
@@ -172,6 +181,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       out.Key("hp"); out.Int(actor->attribute(ATR_HITPOINTS));
       out.Key("hp_max"); out.Int(actor->attribute(ATR_HITPOINTSMAX));
       out.Key("camera_bone"); vec(actor->cameraBone(game.camera()->isFirstPerson()));
+      out.Key("head_bone"); vec(actor->cameraBone(true));
       Vec3 eye(0,0,20);
       actor->cameraMatrix(true).project(eye);
       out.Key("first_person_eye"); vec(eye);
@@ -284,11 +294,11 @@ void MainWindow::pollTestControl() {
       SystemApi::exit();
       return;
       }
-    if(!game.player())
+    if(!game.player() && action!="screenshot_ui" && action!="start_game")
       throw std::runtime_error("No player is ready");
     testInputPlayer = game.localPlayerId();
     if(cmd.HasMember("player")) {
-      if(!cmd["player"].IsUint64() || !game.world()->playerById(cmd["player"].GetUint64()))
+      if(!cmd["player"].IsUint64() || game.world()==nullptr || !game.world()->playerById(cmd["player"].GetUint64()))
         throw std::runtime_error("Unknown player identity");
       testInputPlayer = cmd["player"].GetUint64();
       }
@@ -345,6 +355,54 @@ void MainWindow::pollTestControl() {
         throw std::runtime_error("Expected local mouse deltas in -1000..1000 pixels");
       // Feed the ordinary mouse processing step; it updates camera and controller.
       dMouse += Point(cmd["dx"].GetInt(),cmd["dy"].GetInt());
+      }
+    else if(action=="hold_simulation") {
+      if(!cmd.HasMember("hold") || !cmd["hold"].IsBool())
+        throw std::runtime_error("Expected hold boolean");
+      clearInput();
+      runtimeMode = cmd["hold"].GetBool() ? R_Suspended : R_Normal;
+      }
+    else if(action=="campaign_probe") {
+      // Read-only diagnostic archive, not a loadable/saveable guest checkpoint.
+      const auto output = fs::path(testControlDir)/("campaign-"+testRequestId+".zip");
+      {
+      WFile file(output.string().c_str());
+      Serialize snapshot(file);
+      game.world()->save(snapshot);
+      snapshot.setEntry("game/daedalus");
+      game.world()->script().saveVar(snapshot);
+      snapshot.setEntry("game/quests");
+      game.world()->script().saveQuests(snapshot);
+      snapshot.setEntry("game/perc");
+      game.world()->script().savePerc(snapshot);
+      snapshot.finish();
+      }
+      replyTestControl(testRequestId, {}, output.string());
+      return;
+      }
+    else if(action=="attempt_campaign_effects") {
+      // Deliberately bypass the UI to exercise real engine authority gates.
+      auto world = game.world();
+      auto actor = world->playerById(testInputPlayer);
+      actor->changeAttribute(ATR_HITPOINTS,-7,false);
+      Item* plant = nullptr;
+      const auto cls = world->script().findSymbolIndex("ITPL_HEALTH_HERB_01");
+      world->detectItem(actor->position(),300.f,[&](Item& item) {
+        if(item.clsId()==cls) plant = &item;
+        });
+      if(!plant) throw std::runtime_error("Missing plant for campaign effects probe");
+      actor->takeItem(*plant);
+      world->triggerEvent(TriggerEvent("N07_PROBE","",world->tickCount()+60000,TriggerEvent::T_Trigger));
+      world->script().runFunction("INITPERCEPTIONS");
+      game.gameSession()->tick(16);
+      }
+    else if(action=="fixture_quest") {
+      auto& script = game.world()->script();
+      script.log_createtopic("N07 isolation",0);
+      script.log_addentry("N07 isolation","Host checkpoint marker");
+      }
+    else if(action=="start_game") {
+      startGame(game.defaultWorld());
       }
     else if(action=="fixture_health") {
       auto actor = game.world()->playerById(testInputPlayer);

@@ -1236,6 +1236,7 @@ int32_t Npc::attribute(Attribute a) const {
   }
 
 void Npc::changeAttribute(Attribute a, int32_t val, bool allowUnconscious) {
+  if(!owner.isAuthoritative()) return;
   if(a>=ATR_MAX || val==0)
     return;
 
@@ -2012,6 +2013,7 @@ void Npc::commitDamage() {
   }
 
 void Npc::takeDamage(Npc &other, const Bullet* b) {
+  if(!owner.isAuthoritative()) return;
   if(isDown())
     return;
 
@@ -2036,6 +2038,7 @@ void Npc::takeDamage(Npc &other, const Bullet* b) {
   }
 
 void Npc::takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t splId) {
+  if(!owner.isAuthoritative()) return;
   if(isDown())
     return;
 
@@ -2051,6 +2054,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t s
   }
 
 void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell) {
+  if(!owner.isAuthoritative()) return;
   float a  = angleDir(other.x-x,other.z-z);
   float da = a-angle;
   if(std::cos(da*M_PI/180.0)<0)
@@ -2130,6 +2134,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
   }
 
 void Npc::takeFallDamage(const Vec3& fallSpeed) {
+  if(!owner.isAuthoritative()) return;
   if(bodyStateMasked()==BS_FALL) {
     if(!isFallingDeep()) {
       // small fall
@@ -2155,6 +2160,7 @@ void Npc::takeFallDamage(const Vec3& fallSpeed) {
   }
 
 void Npc::takeDrownDamage() {
+  if(!owner.isAuthoritative()) return;
   changeAttribute(Attribute::ATR_HITPOINTS, -attribute(Attribute::ATR_HITPOINTSMAX), false);
   }
 
@@ -2314,6 +2320,7 @@ void Npc::tickRegen(int32_t& v, const int32_t max, const int32_t chg, const uint
   }
 
 void Npc::tickAnimationTags() {
+  if(!owner.isAuthoritative()) return;
   Animation::EvCount ev;
   const bool hasEvents = visual.processEvents(owner,lastEventTime,ev);
   visual.processLayers(owner);
@@ -2332,6 +2339,7 @@ void Npc::tickAnimationTags() {
   }
 
 void Npc::tick(uint64_t dt) {
+  if(!owner.isAuthoritative()) return;
   static bool dbg = false;
   static int  kId = 432;
   if(dbg && !isPlayer() && hnpc->id!=kId)
@@ -2998,6 +3006,7 @@ bool Npc::isPlayerEnabledState(const ::AiState& st) const {
   }
 
 void Npc::tickRoutine() {
+  if(!owner.isAuthoritative()) return;
   if(!aiState.funcIni.isValid() && !isPlayer()) {
     auto r = currentRoutine();
     if(r.callback.isValid()) {
@@ -3395,6 +3404,7 @@ Item* Npc::addItem(std::unique_ptr<Item>&& i) {
   }
 
 Item* Npc::takeItem(Item& item) {
+  if(!owner.isAuthoritative()) return nullptr;
   if(interactive()!=nullptr)
     return nullptr;
   if(item.isTorchBurn() && (isUsingTorch() || weaponState()!=WeaponState::NoWeapon))
@@ -3622,10 +3632,12 @@ void Npc::delItem(size_t item, uint32_t amount) {
   }
 
 void Npc::useItem(size_t item) {
+  if(!owner.isAuthoritative()) return;
   useItem(item,Item::NSLOT,false);
   }
 
 void Npc::useItem(size_t item, uint8_t slotHint, bool force) {
+  if(!owner.isAuthoritative()) return;
   invent.use(item,*this,slotHint,force);
   }
 

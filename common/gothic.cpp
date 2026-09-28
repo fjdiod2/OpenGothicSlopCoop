@@ -265,6 +265,10 @@ const VersionInfo& Gothic::version() const {
   return vinfo;
   }
 
+bool Gothic::isGuest() const {
+  return CommandLine::inst().coopEndpoint().role==Coop::Role::Guest;
+  }
+
 bool Gothic::isInGame() const {
   return game!=nullptr;
   }

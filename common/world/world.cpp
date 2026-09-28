@@ -146,6 +146,7 @@ void World::insertPlayer(std::unique_ptr<Npc> &&npc, std::string_view waypoint) 
   }
 
 void World::setPlayer(Npc* npc) {
+  if(!isAuthoritative()) return;
   if(playerRoster.size()>1)
     return; // Marvin possession cannot replace a persistent co-op identity.
   if(npc==nullptr)
@@ -179,6 +180,7 @@ uint64_t World::playerId(const Npc* npc) const {
   }
 
 Npc* World::addPlayer(uint64_t id) {
+  if(!isAuthoritative()) return nullptr;
   if(auto existing = playerById(id))
     return existing;
   if(id!=PlayerIdentity::Companion || playerRoster.size()>=2 || npcPlayer==nullptr)
@@ -463,6 +465,7 @@ void World::scaleTime(uint64_t& dt) {
   }
 
 void World::tick(uint64_t dt) {
+  if(!isAuthoritative()) return;
   static bool doTicks=true;
   if(!doTicks)
     return;
@@ -475,6 +478,14 @@ void World::tick(uint64_t dt) {
 
 uint64_t World::tickCount() const {
   return game.tickCount();
+  }
+
+uint64_t World::presentationTickCount() const {
+  return game.presentationTickCount();
+  }
+
+bool World::isAuthoritative() const {
+  return game.isAuthoritative();
   }
 
 void World::setDayTime(int32_t h, int32_t min) {
@@ -587,10 +598,12 @@ Interactive* World::findInteractive(const Npc& pl) {
   }
 
 void World::triggerEvent(const TriggerEvent &e) {
+  if(!isAuthoritative()) return;
   wobj.triggerEvent(e);
   }
 
 void World::execTriggerEvent(const TriggerEvent& e) {
+  if(!isAuthoritative()) return;
   if(e.timeBarrier > this->tickCount()) {
     triggerEvent(std::move(e));
     return;
@@ -686,6 +699,7 @@ bool World::isTargeted(Npc& npc) {
   }
 
 Npc *World::addNpc(std::string_view name, std::string_view at) {
+  if(!isAuthoritative()) return nullptr;
   size_t id = script().findSymbolIndex(name);
   if(id==size_t(-1))
     return nullptr;
@@ -693,14 +707,17 @@ Npc *World::addNpc(std::string_view name, std::string_view at) {
   }
 
 Npc *World::addNpc(size_t npcInstance, std::string_view at) {
+  if(!isAuthoritative()) return nullptr;
   return wobj.addNpc(npcInstance,at);
   }
 
 Npc* World::addNpc(size_t npcInstance, const Tempest::Vec3& at) {
+  if(!isAuthoritative()) return nullptr;
   return wobj.addNpc(npcInstance,at);
   }
 
 void World::removeNpc(Npc& npc) {
+  if(!isAuthoritative()) return;
   if(playerRoster.size()>1) {
     for(auto& entry:playerRoster)
       if(entry.second==&npc) {
@@ -712,26 +729,32 @@ void World::removeNpc(Npc& npc) {
   }
 
 Item *World::addItem(size_t itemInstance, std::string_view at) {
+  if(!isAuthoritative()) return nullptr;
   return wobj.addItem(itemInstance,at);
   }
 
 Item* World::addItem(const zenkit::VItem& vob) {
+  if(!isAuthoritative()) return nullptr;
   return wobj.addItem(vob);
   }
 
 Item* World::addItem(size_t itemInstance, const Tempest::Vec3& pos) {
+  if(!isAuthoritative()) return nullptr;
   return wobj.addItem(itemInstance, pos);
   }
 
 Item* World::addItemDyn(size_t itemInstance, const Tempest::Matrix4x4& pos, size_t owner) {
+  if(!isAuthoritative()) return nullptr;
   return wobj.addItemDyn(itemInstance, pos, owner);
   }
 
 std::unique_ptr<Item> World::takeItem(Item &it) {
+  if(!isAuthoritative()) return nullptr;
   return wobj.takeItem(it);
   }
 
 void World::removeItem(Item& it) {
+  if(!isAuthoritative()) return;
   wobj.removeItem(it);
   }
 
@@ -972,6 +995,7 @@ const zenkit::IFocus& World::searchPolicy(const Npc& pl, TargetCollect& collAlgo
   }
 
 void World::triggerOnStart(bool firstTime) {
+  if(!isAuthoritative()) return;
   wobj.triggerOnStart(firstTime);
   }
 
