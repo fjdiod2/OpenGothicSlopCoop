@@ -81,7 +81,7 @@ Camera::Camera() {
   }
 
 void Camera::reset() {
-  reset(Gothic::inst().player());
+  reset(Gothic::inst().localPlayer());
   }
 
 void Camera::reset(const Npc* pl) {
@@ -197,7 +197,7 @@ void Camera::setMode(const Camera::Mode m) {
     return;
 
   if(camMod==Camera::FirstPerson) {
-    if(auto pl = Gothic::inst().player()) {
+    if(auto pl = Gothic::inst().localPlayer()) {
       state.spin = Vec3(0, pl->rotation(), 0);
       }
     return;
@@ -213,7 +213,7 @@ void Camera::setMode(const Camera::Mode m) {
     state.spin = Vec3(0);
     }
 
-  if(auto pl = Gothic::inst().player()) {
+  if(auto pl = Gothic::inst().localPlayer()) {
     state.spin = Vec3(0, pl->rotation(), 0);
     }
 
@@ -228,7 +228,7 @@ void Camera::setMarvinMode(Camera::MarvinMode nextMod) {
     return;
 
   if(nextMod==M_Pinned) {
-    const auto pl = Gothic::inst().player();
+    const auto pl = Gothic::inst().localPlayer();
 
     auto      offset = origin;
     Matrix4x4 rotMat = pl!=nullptr ? pl->cameraMatrix(false) : Matrix4x4::mkIdentity();
@@ -552,7 +552,7 @@ const zenkit::ICamera& Camera::cameraDef() const {
     return camd.fallCam();
   if(camMod==Mobsi) {
     std::string_view tag = "", pos = "";
-    if(auto pl = Gothic::inst().player())
+    if(auto pl = Gothic::inst().localPlayer())
       if(auto inter = pl->interactive()) {
         tag = inter->schemeName();
         pos = inter->posSchemeName();
@@ -729,7 +729,7 @@ void Camera::tick(uint64_t dt) {
       break;
       }
     case M_Pinned: {
-      const auto pl     = Gothic::inst().player();
+      const auto pl     = Gothic::inst().localPlayer();
       const auto rotMat = pl!=nullptr ? pl->cameraMatrix(false) : Matrix4x4::mkIdentity();
 
       auto offset = pin.origin;
@@ -754,7 +754,7 @@ void Camera::tick(uint64_t dt) {
 
   auto world = Gothic::inst().world();
   if(world!=nullptr) {
-    auto  pl     = isFree() ? nullptr : world->player();
+    auto  pl     = isFree() ? nullptr : Gothic::inst().localPlayer();
     auto& physic = *world->physic();
 
     if(pl!=nullptr && pl->isSwim()) {
@@ -772,7 +772,7 @@ void Camera::tick(uint64_t dt) {
   }
 
 void Camera::tickFirstPerson(float /*dtF*/) {
-  const auto pl     = Gothic::inst().player();
+  const auto pl     = Gothic::inst().localPlayer();
   const auto rotMat = pl!=nullptr ? pl->cameraMatrix(true) : Matrix4x4::mkIdentity();
 
   state.spin   = clampRotation(state.spin);
@@ -937,7 +937,7 @@ Vec3 Camera::clampRotation(Tempest::Vec3 spin) {
   float       maxAzim = +180;
   float       minAzim = -180;
 
-  const auto pl = Gothic::inst().player();
+  const auto pl = Gothic::inst().localPlayer();
   if(pl==nullptr)
     return spin;
 
@@ -976,7 +976,7 @@ void Camera::debugDraw(DbgPainter& p) {
   p.drawLine(state.target, inter.target);
   p.drawLine(inter.target, origin);
 
-  if(auto pl = Gothic::inst().player()) {
+  if(auto pl = Gothic::inst().localPlayer()) {
     float a  = pl->rotationRad()+float(M_PI*0.5);
     float c  = std::cos(a), s = std::sin(a);
     auto  ln = Vec3(c,0,s)*25.f;

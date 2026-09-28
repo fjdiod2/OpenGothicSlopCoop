@@ -2675,7 +2675,8 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
       setDirection(act.point->direction());
       if(isPlayer()) {
         updateTransform();
-        Gothic::inst().camera()->reset(this);
+        if(Gothic::inst().localPlayer()==this)
+          Gothic::inst().camera()->reset(this);
         }
       }
       break;
@@ -4793,7 +4794,7 @@ void Npc::updateTransform() {
 
 void Npc::updateAnimation(uint64_t dt, bool force) {
   const auto camera = Gothic::inst().camera();
-  if(isPlayer() && camera!=nullptr && camera->isFree())
+  if(Gothic::inst().localPlayer()==this && camera!=nullptr && camera->isFree())
     dt = 0;
 
   if(durtyTranform) {

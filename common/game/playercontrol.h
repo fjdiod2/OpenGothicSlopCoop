@@ -21,6 +21,9 @@ class PlayerControl final {
     PlayerControl(DialogMenu& dlg, InventoryMenu& inv);
     ~PlayerControl();
 
+    void bindPlayer(uint64_t id);
+    Npc* controlledPlayer() const;
+
     void  onKeyPressed (KeyCodec::Action a, Tempest::Event::KeyType key, KeyCodec::Mapping mapping);
     void  onKeyReleased(KeyCodec::Action a, KeyCodec::Mapping mapping);
     bool  isPressed(KeyCodec::Action a) const;
@@ -155,6 +158,8 @@ class PlayerControl final {
 
     DialogMenu&    dlg;
     InventoryMenu& inv;
+    uint64_t       playerId=0; // zero follows the local window; nonzero is explicit.
+    Camera*        controlledCamera() const;
 
     void           setupSettings();
     bool           canInteract() const;

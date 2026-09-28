@@ -68,6 +68,11 @@ CommandLine::CommandLine(int argc, const char** argv) {
       // http://www.gothic-library.ru/publ/marvin/1-1-0-547
       devmode = true;
       }
+    else if(arg=="-test-control") {
+      if(++i>=argc)
+        throw std::invalid_argument("-test-control requires a directory");
+      testControl = argv[i];
+      }
     else if(arg=="-save") {
       ++i;
       if(i<argc){
@@ -162,6 +167,9 @@ CommandLine::CommandLine(int argc, const char** argv) {
       Log::i("unrecognized commandline option: \"", arg, "\"");
       }
     }
+
+  if(!testControl.empty() && !devmode)
+    throw std::invalid_argument("-test-control requires -devmode");
 
   if(gpath.empty()) {
     InstallDetect inst;

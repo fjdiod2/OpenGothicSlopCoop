@@ -317,6 +317,18 @@ Npc *Gothic::player() {
   return nullptr;
   }
 
+Npc* Gothic::localPlayer() {
+  auto w = world();
+  return w ? w->playerById(localPlayerIdentity) : nullptr;
+  }
+
+void Gothic::setLocalPlayer(uint64_t id) {
+  auto w = world();
+  if(!w || !w->playerById(id))
+    throw std::invalid_argument("Unknown local player identity");
+  localPlayerIdentity = id;
+  }
+
 Camera* Gothic::camera() {
   if(game)
     return &game->camera();

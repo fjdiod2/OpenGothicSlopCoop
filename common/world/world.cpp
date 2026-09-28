@@ -132,6 +132,7 @@ void World::createPlayer(std::string_view cls) {
   std::string_view waypoint = wmatrix->startPoint().name;
   auto             npc      = std::make_unique<Npc>(*this, id, waypoint, NpcProcessPolicy::Player);
   npcPlayer = wobj.insertPlayer(std::move(npc), waypoint);
+  playerRoster[1] = npcPlayer;
   game.script()->setInstanceNPC("HERO",*npcPlayer);
   }
 
@@ -139,10 +140,13 @@ void World::insertPlayer(std::unique_ptr<Npc> &&npc, std::string_view waypoint) 
   if(npc==nullptr)
     return;
   npcPlayer = wobj.insertPlayer(std::move(npc),waypoint);
+  playerRoster[1] = npcPlayer;
   game.script()->setInstanceNPC("HERO",*npcPlayer);
   }
 
 void World::setPlayer(Npc* npc) {
+  if(playerRoster.size()>1)
+    return; // Marvin possession cannot replace a persistent co-op identity.
   if(npc==nullptr)
     return;
   npcPlayer->setProcessPolicy(NpcProcessPolicy::AiNormal);
@@ -158,6 +162,43 @@ void World::setPlayer(Npc* npc) {
     npc->setPerceptionDisable(PercType(i));
   
   npcPlayer = npc;
+  playerRoster[1] = npcPlayer;
+  }
+
+Npc* World::playerById(uint64_t id) const {
+  auto it = playerRoster.find(id);
+  return it==playerRoster.end() ? nullptr : it->second;
+  }
+
+uint64_t World::playerId(const Npc* npc) const {
+  for(auto& entry:playerRoster)
+    if(entry.second==npc)
+      return entry.first;
+  return 0;
+  }
+
+Npc* World::addPlayer(uint64_t id) {
+  if(auto existing = playerById(id))
+    return existing;
+  if(id<2 || playerRoster.size()>=2 || npcPlayer==nullptr)
+    throw std::runtime_error("Only a host and one companion are supported");
+  auto cls = script().findSymbolIndex("PC_HERO");
+  if(cls==size_t(-1))
+    throw std::runtime_error("No hero template for companion");
+  auto npc = std::make_unique<Npc>(*this,cls,startPoint().name,NpcProcessPolicy::Player);
+  auto companion = wobj.insertPlayer(std::move(npc), startPoint().name);
+  auto pos = npcPlayer->position();
+  pos.x += 110.f;
+  companion->attachToPoint(nullptr);
+  companion->setPosition(pos);
+  companion->setDirection(npcPlayer->rotation());
+  companion->clearAiQueue();
+  companion->updateTransform();
+  playerRoster.emplace(id,companion);
+  // Constructing another template instance must not replace the campaign hero.
+  script().setInstanceNPC("PC_HERO",*npcPlayer);
+  script().setInstanceNPC("HERO",*npcPlayer);
+  return companion;
   }
 
 void World::postInit() {
@@ -183,6 +224,43 @@ void World::load(Serialize &fin) {
 
   wobj.load(fin);
   npcPlayer = wobj.findHero();
+  playerRoster.clear();
+  if(fin.setEntry("worlds/",wname,"/coop/players")) {
+    uint32_t version=0, count=0;
+    fin.read(version,count);
+    if(version!=1 || count<1 || count>2)
+      throw std::runtime_error("Unsupported co-op player roster");
+    for(uint32_t i=0; i<count; ++i) {
+      uint64_t id=0;
+      uint32_t index=0;
+      fin.read(id,index);
+      if(id==0 || index>=npcCount() || playerRoster.count(id)!=0)
+        throw std::runtime_error("Invalid co-op player identity");
+      auto npc = npcById(index);
+      if(!npc->isPlayer())
+        throw std::runtime_error("Co-op identity is not a controlled character");
+      for(auto& entry:playerRoster)
+        if(entry.second==npc)
+          throw std::runtime_error("Duplicate co-op character");
+      playerRoster.emplace(id,npc);
+      }
+    npcPlayer = playerById(1);
+    if(!npcPlayer)
+      throw std::runtime_error("Co-op save is missing the campaign hero");
+    script().setInstanceNPC("PC_HERO",*npcPlayer);
+    }
+  else if(npcPlayer) {
+    playerRoster[1] = npcPlayer;
+    }
+  for(uint32_t i=0; i<npcCount(); ++i) {
+    auto npc = npcById(i);
+    if(!npc->isPlayer())
+      continue;
+    const auto it = std::find_if(playerRoster.begin(),playerRoster.end(),
+                                [npc](const auto& entry){ return entry.second==npc; });
+    if(it==playerRoster.end())
+      throw std::runtime_error("Save is missing a controlled character's identity");
+    }
   }
 
 void World::save(Serialize &fout) {
@@ -195,6 +273,16 @@ void World::save(Serialize &fout) {
     }
 
   wobj.save(fout);
+  if(playerRoster.size()>1) {
+    fout.setEntry("worlds/",wname,"/coop/players");
+    fout.write(uint32_t(1), uint32_t(playerRoster.size()));
+    for(auto& entry:playerRoster) {
+      const auto index = npcId(entry.second);
+      if(index>=npcCount() || !entry.second->isPlayer())
+        throw std::runtime_error("Cannot save an invalid player roster");
+      fout.write(entry.first, index);
+      }
+    }
   }
 
 uint32_t World::npcId(const Npc *ptr) const {
@@ -611,6 +699,13 @@ Npc* World::addNpc(size_t npcInstance, const Tempest::Vec3& at) {
   }
 
 void World::removeNpc(Npc& npc) {
+  if(playerRoster.size()>1) {
+    for(auto& entry:playerRoster)
+      if(entry.second==&npc) {
+        Tempest::Log::i("Co-op prototype blocked removing player ", entry.first);
+        return;
+        }
+    }
   return wobj.removeNpc(npc);
   }
 

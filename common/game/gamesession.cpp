@@ -249,6 +249,12 @@ std::unique_ptr<World> GameSession::clearWorld() {
   }
 
 void GameSession::changeWorld(std::string_view world, std::string_view wayPoint) {
+  if(wrld && wrld->players().size()>1) {
+    // Joint transfers must carry both characters before this path can be enabled.
+    Gothic::inst().onPrint("Region changes are not available in the co-op prototype");
+    Tempest::Log::i("Co-op prototype blocked region change: ", world);
+    return;
+    }
   chWorld.zen = world;
   chWorld.wp  = wayPoint;
   }

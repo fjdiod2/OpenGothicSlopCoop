@@ -19,6 +19,7 @@
 #include <Tempest/Painter>
 #include <Tempest/Application>
 #include <Tempest/Log>
+#include <limits>
 
 using namespace Tempest;
 
@@ -174,8 +175,8 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
   const auto pl      = owner.player();
   for(size_t i=0; i<npcArr.size(); ++i) {
     auto& npc = *npcArr[i];
-    uint64_t d = (pl==&npc ? dtPlayer : dt);
-    if(freeCam && pl==&npc)
+    uint64_t d = (npc.isPlayer() ? dtPlayer : dt);
+    if(freeCam && Gothic::inst().localPlayer()==&npc)
       continue;
     npc.tick(d);
     }
@@ -227,6 +228,12 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
   auto plPos = pl!=nullptr ? pl->position() : cpos;
   for(auto& i:npcArr) {
     float dist = (i->position()-plPos).quadLength();
+    for(auto& entry:owner.players())
+      dist = std::min(dist, (i->position()-entry.second->position()).quadLength());
+    if(i->isPlayer()) {
+      npcNear.push_back(i.get());
+      continue;
+      }
     if(dist<nearDist){
       npcNear.push_back(i.get());
       if(i.get()!=pl)
@@ -253,7 +260,16 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
 
     const uint64_t percNextTime = i.percNextTime();
     if(percNextTime<=owner.tickCount()) {
-      i.perceptionProcess(*pl);
+      auto target = pl;
+      float distance = pl->isDown() ? std::numeric_limits<float>::max() : (i.position()-pl->position()).quadLength();
+      for(auto& entry:owner.players()) {
+        float candidate = (i.position()-entry.second->position()).quadLength();
+        if(!entry.second->isDown() && candidate<distance) {
+          target = entry.second;
+          distance = candidate;
+          }
+        }
+      i.perceptionProcess(*target);
       }
 
     if(i.processPolicy()==NpcProcessPolicy::AiNormal) {

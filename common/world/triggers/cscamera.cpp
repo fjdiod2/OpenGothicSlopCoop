@@ -182,7 +182,7 @@ void CsCamera::onUntrigger(const TriggerEvent& evt) {
 
   auto& camera = world.gameSession().camera();
   camera.setMode(Camera::Mode::Normal);
-  if(auto pl = Gothic::inst().player()) {
+  if(auto pl = Gothic::inst().localPlayer()) {
     camera.reset(pl);
     } else {
     camera.setMarvinMode(Camera::M_Free);

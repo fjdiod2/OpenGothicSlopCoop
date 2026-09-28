@@ -47,6 +47,7 @@ class InventoryMenu : public Tempest::Widget {
     void  open(Npc& pl,Interactive& chest);
     State isOpen() const;
     bool  isActive() const;
+    const Npc* activePlayer() const { return isActive() ? player : nullptr; }
     void  onWorldChanged();
 
     void  tick(uint64_t dt);

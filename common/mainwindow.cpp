@@ -26,10 +26,19 @@
 #include "commandline.h"
 #include "gothic.h"
 
+#include <filesystem>
+#include <system_error>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 using namespace Tempest;
 
 MainWindow::MainWindow(Device& device)
-  : Window(Maximized),device(device),swapchain(device,hwnd()),
+  : Window(CommandLine::inst().testControlPath().empty() ? Maximized : Normal),device(device),swapchain(device,hwnd()),
     atlas(device),rootMenu(keycodec),inventory(keycodec),
     dialogs(inventory),document(keycodec),
     console(*this),
@@ -111,6 +120,7 @@ MainWindow::MainWindow(Device& device)
 
   displayPos = Shortcut(*this,Event::M_Alt,Event::K_P);
   displayPos.onActivated.bind(this, &MainWindow::onMarvinKey<Event::K_P>);
+  initTestControl();
   }
 
 MainWindow::~MainWindow() {
@@ -160,6 +170,7 @@ void MainWindow::setupUi() {
   }
 
 void MainWindow::paintEvent(PaintEvent& event) {
+  paintedHud = {};
   Painter p(event);
   auto world = Gothic::inst().world();
   auto st    = Gothic::inst().checkLoading();
@@ -214,8 +225,10 @@ void MainWindow::paintEvent(PaintEvent& event) {
       auto focus = world->validateFocus(player.focus());
       paintFocus(p,focus,vp);
 
-      if(auto pl = Gothic::inst().player()){
+      if(auto pl = Gothic::inst().localPlayer()){
         if (!Gothic::inst().isDesktop()) {
+          paintedHud = {world->playerId(pl), pl->attribute(ATR_HITPOINTS), pl->attribute(ATR_HITPOINTSMAX),
+                        pl->attribute(ATR_MANA), pl->attribute(ATR_MANAMAX)};
           auto& opt = Gothic::options();
           float hp  = float(pl->attribute(ATR_HITPOINTS))/float(pl->attribute(ATR_HITPOINTSMAX));
           float mp  = float(pl->attribute(ATR_MANA))     /float(pl->attribute(ATR_MANAMAX));
@@ -540,7 +553,7 @@ void MainWindow::keyUpEvent(KeyEvent &event) {
   if(!menuEv.empty()) {
     rootMenu.setMenu(menuEv,act);
     rootMenu.showVersion(act==KeyCodec::Escape);
-    if(auto pl = Gothic::inst().player())
+    if(auto pl = Gothic::inst().localPlayer())
       rootMenu.setPlayer(*pl);
     clearInput();
     }
@@ -548,7 +561,7 @@ void MainWindow::keyUpEvent(KeyEvent &event) {
     if(inventory.isActive()) {
       inventory.close();
       } else {
-      auto pl = Gothic::inst().player();
+      auto pl = Gothic::inst().localPlayer();
       if(pl!=nullptr)
         inventory.open(*pl);
       }
@@ -571,8 +584,7 @@ void MainWindow::paintFocus(Painter& p, const Focus& focus, const Matrix4x4& vp)
     return;
 
   const float scale = Gothic::interfaceScale(this);
-  auto        world = Gothic::inst().world();
-  auto        pl    = world==nullptr ? nullptr : world->player();
+  auto        pl    = Gothic::inst().localPlayer();
   if(pl==nullptr)
     return;
 
@@ -796,7 +808,7 @@ void MainWindow::onMarvinKey() {
     case Event::K_F4:
       if(Gothic::inst().isMarvinEnabled()) {
         auto camera = Gothic::inst().camera();
-        auto pl = Gothic::inst().player();
+        auto pl = Gothic::inst().localPlayer();
         if(camera!=nullptr && pl!=nullptr) {
           camera->setMarvinMode(Camera::M_Normal);
           camera->reset(pl);
@@ -824,7 +836,7 @@ void MainWindow::onMarvinKey() {
     case Event::K_F6:
       if(Gothic::inst().isMarvinEnabled() && !dialogs.isActive()) {
         auto camera = Gothic::inst().camera();
-        auto pl     = Gothic::inst().player();
+        auto pl     = Gothic::inst().localPlayer();
         auto inter  = pl!=nullptr ? pl->interactive() : nullptr;
         if(camera!=nullptr && inter==nullptr)
           camera->setMarvinMode(Camera::M_Free);
@@ -859,7 +871,7 @@ void MainWindow::onMarvinKey() {
       break;
     case Event::K_P:
       if(Gothic::inst().isMarvinEnabled()) {
-        if(auto p = Gothic::inst().player()) {
+        if(auto p = Gothic::inst().localPlayer()) {
           auto pos = p->position();
           string_frm buf("Position: ", pos.x,'/',pos.y,'/',pos.z);
           Gothic::inst().onPrint(buf);
@@ -879,6 +891,10 @@ uint64_t MainWindow::tick() {
 
   auto st = Gothic::inst().checkLoading();
   if(st==Gothic::LoadState::Finalize || st==Gothic::LoadState::FailedLoad || st==Gothic::LoadState::FailedSave) {
+    if(saveStatus=="pending")
+      saveStatus = st==Gothic::LoadState::Finalize ? "committed" : "failed";
+    if(loadStatus=="pending")
+      loadStatus = st==Gothic::LoadState::Finalize ? "loaded" : "failed";
     Gothic::inst().finishLoading();
     if(st==Gothic::LoadState::FailedLoad)
       rootMenu.setMainMenu();
@@ -928,6 +944,10 @@ uint64_t MainWindow::tick() {
     clearInput();
   tickMouse(dt);
   player.tickMove(dt);
+  for(auto& entry:otherPlayers) {
+    entry.second->tickFocus();
+    entry.second->tickMove(dt);
+    }
   update();
   return dt;
   }
@@ -938,7 +958,7 @@ void MainWindow::updateAnimation(uint64_t dt) {
 
 void MainWindow::tickCamera(uint64_t dt) {
   auto pcamera = Gothic::inst().camera();
-  auto pl      = Gothic::inst().player();
+  auto pl      = Gothic::inst().localPlayer();
   if(pcamera==nullptr)
     return;
 
@@ -1000,12 +1020,12 @@ Camera::Mode MainWindow::solveCameraMode() const {
      inventory.isOpen()==InventoryMenu::State::Ransack)
     return Camera::Inventory;
 
-  if(auto pl=Gothic::inst().player()) {
+  if(auto pl=Gothic::inst().localPlayer()) {
     if(pl->interactive()!=nullptr)
       return Camera::Mobsi;
     }
 
-  if(auto pl = Gothic::inst().player()) {
+  if(auto pl = Gothic::inst().localPlayer()) {
     if(pl->isDead())
       return Camera::Death;
     if(pl->isDive())
@@ -1035,6 +1055,7 @@ Camera::Mode MainWindow::solveCameraMode() const {
 
 void MainWindow::startGame(std::string_view slot) {
   // gothic.emitGlobalSound(gothic.loadSoundFx("NEWGAME"));
+  loadStatus = "pending";
 
   if(Gothic::inst().checkLoading()==Gothic::LoadState::Idle){
     setGameImpl(nullptr);
@@ -1051,6 +1072,7 @@ void MainWindow::startGame(std::string_view slot) {
   }
 
 void MainWindow::loadGame(std::string_view slot) {
+  loadStatus = "pending";
   if(Gothic::inst().checkLoading()==Gothic::LoadState::Idle) {
     setGameImpl(nullptr);
     }
@@ -1102,13 +1124,48 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   auto& thumb = lres.isEmpty() ? tex : lres;
   auto  pm    = device.readPixels(textureCast<const Texture2d&>(thumb));
 
+  saveStatus = "pending";
   Gothic::inst().startSave(std::move(textureCast<Texture2d&>(tex)),[slot=std::string(slot),name=std::string(name),pm](std::unique_ptr<GameSession>&& game){
     if(!game)
       return std::move(game);
 
-    Tempest::WFile f(slot);
-    Serialize      s(f);
-    game->save(s,name,pm);
+    // Keep the last checkpoint until a complete archive has reached disk.
+    const auto temporary = slot+".pending";
+    bool created = false;
+    try {
+      {
+      Tempest::WFile f(temporary);
+      created = true;
+      Serialize s(f);
+      game->save(s,name,pm);
+      s.finish();
+      if(!f.flush())
+        throw std::runtime_error("Unable to flush checkpoint");
+      }
+#ifdef _WIN32
+      const auto from = std::filesystem::path(temporary).wstring();
+      const auto to   = std::filesystem::path(slot).wstring();
+      if(!MoveFileExW(from.c_str(),to.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
+        throw std::system_error(int(GetLastError()),std::system_category(),"Commit checkpoint");
+#else
+      const int fd = ::open(temporary.c_str(),O_RDONLY);
+      if(fd<0)
+        throw std::system_error(errno,std::generic_category(),"Open completed checkpoint");
+      const int result = ::fsync(fd);
+      const int error  = errno;
+      ::close(fd);
+      if(result!=0)
+        throw std::system_error(error,std::generic_category(),"Sync checkpoint");
+      std::filesystem::rename(temporary,slot);
+#endif
+      }
+    catch(...) {
+      if(created) {
+        std::error_code ignored;
+        std::filesystem::remove(temporary,ignored);
+        }
+      throw;
+      }
 
     // no print yet, because threading
     // gothic.print("Game saved");
@@ -1126,12 +1183,17 @@ void MainWindow::onVideo(std::string_view fname) {
 
 void MainWindow::onStartLoading() {
   player   .clearInput();
+  for(auto& entry:otherPlayers) {
+    entry.second->clearInput();
+    entry.second->clearFocus();
+    }
   inventory.onWorldChanged();
   dialogs  .onWorldChanged();
   }
 
 void MainWindow::onWorldLoaded() {
   dMouse = Point();
+  rebuildPlayerControls();
 
   if(Gothic::inst().isBenchmarkMode()) {
     if(auto world = Gothic::inst().world()) {
@@ -1152,12 +1214,15 @@ void MainWindow::onWorldLoaded() {
   if(auto c = Gothic::inst().camera())
     c->setViewport(uint32_t(w()),uint32_t(h()));
 
+  if(auto world = Gothic::inst().world(); world && world->players().size()>1)
+    Gothic::inst().camera()->reset(Gothic::inst().localPlayer());
+
   renderer.onWorldChanged();
 
-  if(auto pl = Gothic::inst().player())
+  if(auto pl = Gothic::inst().localPlayer())
     rootMenu.setPlayer(*pl);
 
-  if(auto pl = Gothic::inst().player())
+  if(auto pl = Gothic::inst().localPlayer())
     pl->multSpeed(1.f);
   lastTick = Application::tickCount();
   player.clearFocus();
@@ -1207,7 +1272,79 @@ void MainWindow::setGameImpl(std::unique_ptr<GameSession> &&w) {
 
 void MainWindow::clearInput() {
   player.clearInput();
+  for(auto& entry:otherPlayers)
+    entry.second->clearInput();
   std::memset(mouseP,0,sizeof(mouseP));
+  }
+
+void MainWindow::rebuildPlayerControls() {
+  otherPlayers.clear();
+  player.bindPlayer(0); // The window controller follows the local selection.
+  auto& game = Gothic::inst();
+  if(auto world = game.world()) {
+    if(!game.localPlayer() && world->playerById(1))
+      game.setLocalPlayer(1);
+    for(auto& entry:world->players())
+      if(entry.first!=game.localPlayerId())
+        controlForPlayer(entry.first);
+    }
+  }
+
+void MainWindow::selectLocalPlayer(uint64_t id) {
+  auto& game = Gothic::inst();
+  if(game.checkLoading()!=Gothic::LoadState::Idle || !game.world() || !game.world()->playerById(id))
+    throw std::runtime_error("Unknown or unavailable local player");
+  if(dialogs.isActive() || rootMenu.isActive() || document.isActive() || video.isActive() || chapter.isActive() ||
+     game.world()->currentCs()!=nullptr ||
+     (inventory.isActive() && inventory.isOpen()!=InventoryMenu::State::Equip))
+    throw std::runtime_error("Cannot switch local player during an active interaction");
+  for(auto& entry:game.world()->players())
+    if(entry.second->interactive()!=nullptr)
+      throw std::runtime_error("Cannot switch local player during an active interaction");
+  clearInput();
+  inventory.onWorldChanged();
+  uiKeyUp = nullptr;
+  dMouse = Point();
+  game.setLocalPlayer(id);
+  rebuildPlayerControls();
+  if(auto camera = game.camera()) {
+    camera->setFirstPerson(false);
+    camera->setLookBack(false);
+    camera->setMarvinMode(Camera::M_Normal);
+    camera->setMode(Camera::Normal);
+    camera->reset(game.localPlayer());
+    }
+  rootMenu.setPlayer(*game.localPlayer());
+  update();
+  }
+
+PlayerControl& MainWindow::controlForPlayer(uint64_t id) {
+  if(id==Gothic::inst().localPlayerId())
+    return player;
+  auto world = Gothic::inst().world();
+  if(!world || !world->playerById(id))
+    throw std::runtime_error("Unknown controlled player");
+  auto& control = otherPlayers[id];
+  if(!control) {
+    control = std::make_unique<PlayerControl>(dialogs,inventory);
+    control->bindPlayer(id);
+    }
+  return *control;
+  }
+
+void MainWindow::dispatchPlayerKey(uint64_t id, KeyEvent& event, bool down) {
+  if(id==Gothic::inst().localPlayerId()) {
+    if(down)
+      keyDownEvent(event);
+    else
+      keyUpEvent(event);
+    return;
+    }
+  auto& control = controlForPlayer(id);
+  if(down)
+    control.onKeyPressed(keycodec.tr(event),event.key,keycodec.mapping(event));
+  else
+    control.onKeyReleased(keycodec.tr(event),keycodec.mapping(event));
   }
 
 void MainWindow::setFullscreen(bool fs) {
@@ -1217,6 +1354,7 @@ void MainWindow::setFullscreen(bool fs) {
 
 void MainWindow::render(){
   try {
+    pollTestControl();
     static uint64_t time=Application::tickCount();
 
     static bool once=true;

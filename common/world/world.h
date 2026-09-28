@@ -5,6 +5,7 @@
 #include <Tempest/Matrix4x4>
 #include <string>
 #include <functional>
+#include <map>
 
 #include <zenkit/World.hh>
 
@@ -38,6 +39,11 @@ class World final {
     void                 createPlayer(std::string_view cls);
     void                 insertPlayer(std::unique_ptr<Npc>&& npc, std::string_view waypoint);
     void                 setPlayer(Npc* npc);
+    // Stable human identity is separate from an NPC's changing array index.
+    Npc*                 playerById(uint64_t id) const;
+    uint64_t             playerId(const Npc* npc) const;
+    Npc*                 addPlayer(uint64_t id);
+    const std::map<uint64_t, Npc*>& players() const { return playerRoster; }
     void                 postInit();
     std::string_view     name() const { return wname; }
 
@@ -211,6 +217,7 @@ class World final {
       } bsp;
 
     Npc*                                  npcPlayer=nullptr;
+    std::map<uint64_t, Npc*>               playerRoster;
 
     std::unique_ptr<DynamicWorld>         wdynamic;
     std::unique_ptr<WorldView>            wview;

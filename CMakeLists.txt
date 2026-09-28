@@ -116,7 +116,7 @@ add_definitions(-DTSF_NO_STDIO)
 include_directories(lib/TinySoundFont)
 
 # Rapidjson
-include_directories(lib/rapidjson/include)
+include_directories(SYSTEM lib/rapidjson/include)
 
 # Tempest
 if(WIN32)

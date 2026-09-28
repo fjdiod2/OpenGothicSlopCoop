@@ -48,6 +48,9 @@ class Serialize {
     Serialize(Serialize&&)=delete;
     ~Serialize();
 
+    // Explicit completion lets checkpoint writers report archive-finalization errors.
+    void finish();
+
     uint16_t version()              const { return wldVer; }
     void     setVersion(uint16_t v)       { wldVer = v;    }
     uint16_t globalVersion()        const { return curVer; }
@@ -298,4 +301,3 @@ class Serialize {
     Tempest::ODevice*        fout      = nullptr;
     Tempest::IDevice*        fin       = nullptr;
   };
-

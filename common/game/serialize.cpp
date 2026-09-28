@@ -62,7 +62,8 @@ Serialize::Serialize(Tempest::ODevice& fout) : fout(&fout) {
   impl.m_pWrite           = Serialize::writeFunc;
   impl.m_pIO_opaque       = this;
   impl.m_zip_type         = MZ_ZIP_TYPE_USER;
-  mz_zip_writer_init_v2(&impl, 0, 0);
+  if(!mz_zip_writer_init_v2(&impl, 0, 0))
+    throw std::runtime_error("unable to initialize game archive writer");
   }
 
 Serialize::Serialize(Tempest::IDevice& fin) : fin(&fin) {
@@ -72,18 +73,32 @@ Serialize::Serialize(Tempest::IDevice& fin) : fin(&fin) {
   impl.m_pRead            = Serialize::readFunc;
   impl.m_pIO_opaque       = this;
   impl.m_zip_type         = MZ_ZIP_TYPE_USER;
-  mz_zip_reader_init(&impl, fin.size(), 0);
+  if(!mz_zip_reader_init(&impl, fin.size(), 0))
+    throw std::runtime_error("invalid or incomplete game archive");
   }
 
 Serialize::~Serialize() {
   if(fin!=nullptr)
     mz_zip_reader_end(&impl);
-  closeEntry();
   if(fout!=nullptr) {
-    mz_zip_writer_finalize_archive(&impl);
-    mz_zip_writer_end(&impl);
-    //Tempest::Log::d("save time = ", Tempest::Application::tickCount()-time0);
+    try {
+      finish();
+      }
+    catch(const std::exception& e) {
+      Tempest::Log::e("Save archive finalization: ", e.what());
+      mz_zip_writer_end(&impl);
+      }
     }
+  }
+
+void Serialize::finish() {
+  if(fout==nullptr)
+    return;
+  closeEntry();
+  if(!mz_zip_writer_finalize_archive(&impl))
+    throw std::runtime_error("unable to finalize game archive");
+  mz_zip_writer_end(&impl);
+  fout = nullptr;
   }
 
 std::string_view Serialize::worldName() const {
@@ -139,7 +154,8 @@ bool Serialize::implSetEntry(std::string_view fname) {
       mz_zip_archive_file_stat stat = {};
       mz_zip_reader_file_stat(&impl,id,&stat);
       entryBuf.resize(size_t(stat.m_uncomp_size));
-      mz_zip_reader_extract_file_to_mem(&impl,entryName.c_str(),entryBuf.data(),entryBuf.size(),0);
+      if(!mz_zip_reader_extract_file_to_mem(&impl,entryName.c_str(),entryBuf.data(),entryBuf.size(),0))
+        throw std::runtime_error("unable to read or verify game archive entry");
       } else {
       entryBuf.clear();
       }

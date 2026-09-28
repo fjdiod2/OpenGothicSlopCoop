@@ -86,6 +86,8 @@ class MainWindow : public Tempest::Window {
     void onBenchmarkFinished();
     void setGameImpl(std::unique_ptr<GameSession>&& w);
     void clearInput();
+    void selectLocalPlayer(uint64_t id);
+    void rebuildPlayerControls();
     void setFullscreen(bool fs);
 
     void processMouse(Tempest::MouseEvent& event, bool enable);
@@ -95,6 +97,27 @@ class MainWindow : public Tempest::Window {
     void setupUi();
 
     void render() override;
+
+    // Local, opt-in development interface; all commands run on the game thread.
+    void initTestControl();
+    void pollTestControl();
+    void replyTestControl(std::string_view id, std::string_view error = {},
+                          std::string_view artifact = {});
+    std::string testControlDir;
+    std::string testSessionId;
+    std::string saveStatus = "none";
+    std::string loadStatus = "none";
+    struct HudObservation {
+      uint64_t player = 0;
+      int hp = 0, hpMax = 0, mana = 0, manaMax = 0;
+      } paintedHud;
+    std::string testRequestId;
+    std::vector<Tempest::Event::KeyType> testHeldKeys;
+    uint64_t testInputPlayer = 1;
+    PlayerControl& controlForPlayer(uint64_t id);
+    void dispatchPlayerKey(uint64_t id, Tempest::KeyEvent& event, bool down);
+    uint64_t testReleaseAt = 0;
+    uint64_t testPollAt = 0;
 
     uint64_t tick();
     void     updateAnimation(uint64_t dt);
@@ -158,6 +181,7 @@ class MainWindow : public Tempest::Window {
     Tempest::Widget*          uiKeyUp=nullptr;
     Tempest::Point            dMouse;
     PlayerControl             player;
+    std::map<uint64_t, std::unique_ptr<PlayerControl>> otherPlayers;
     uint64_t                  lastTick=0;
 
     Tempest::Shortcut         funcKey[11];

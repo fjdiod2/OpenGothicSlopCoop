@@ -90,6 +90,10 @@ class Gothic final {
     World*       world();
     WorldView*   worldView() const;
     Npc*         player();
+    // Presentation/input selection; player() remains the canonical story hero.
+    Npc*         localPlayer();
+    uint64_t     localPlayerId() const { return localPlayerIdentity; }
+    void         setLocalPlayer(uint64_t id);
     Camera*      camera();
     auto         questLog() const -> const QuestLog*;
 
@@ -222,6 +226,7 @@ class Gothic final {
     bool                                    isMarvin       = false;
     bool                                    godMode        = false;
     bool                                    desktop        = false;
+    uint64_t                                localPlayerIdentity = 1;
     bool                                    showFpsCounter = false;
     bool                                    showTime       = false;
     bool                                    vobBox         = false;

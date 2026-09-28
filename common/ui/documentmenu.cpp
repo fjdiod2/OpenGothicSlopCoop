@@ -25,7 +25,7 @@ void DocumentMenu::close() {
     return;
   active=false;
 
-  if(auto pl = Gothic::inst().player())
+  if(auto pl = Gothic::inst().localPlayer())
     pl->setInteraction(nullptr);
   }
 
@@ -62,7 +62,7 @@ void DocumentMenu::paintEvent(PaintEvent &e) {
   float k  = std::min(1.f,float(800.f+float(document.margins.xMargin()))*scale/std::max(mw,1.f));
 
   int   x  = (w()-int(k*mw))/2, y = (h()-int(mh))/2;
-  auto  pl = Gothic::inst().player();
+  auto  pl = Gothic::inst().localPlayer();
 
   Painter p(e);
   for(auto& i:document.pages) {
