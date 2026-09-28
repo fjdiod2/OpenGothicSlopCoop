@@ -66,6 +66,7 @@ WorldObjects::~WorldObjects() {
   }
 
 void WorldObjects::load(Serialize &fin) {
+  objectIds = Coop::ObjectRegistry();
   {
   uint16_t v = 0;
   fin.setEntry("worlds/",fin.worldName(),"/version");
@@ -119,6 +120,7 @@ void WorldObjects::load(Serialize &fin) {
     i->postValidate();
   for(auto& i:npcArr)
     i->postValidate();
+  loadObjectIds(fin);
   }
 
 void WorldObjects::save(Serialize &fout) {
@@ -148,6 +150,80 @@ void WorldObjects::save(Serialize &fout) {
   fout.write(uint32_t(routines.size()));
   for(auto& i:routines)
     i.save(fout);
+  saveObjectIds(fout);
+  }
+
+void WorldObjects::loadObjectIds(Serialize& fin) {
+  using Kind = Coop::ObjectKind;
+  if(!fin.setEntry("worlds/",fin.worldName(),"/coop/objects")) {
+    if(fin.version()>=56) throw std::runtime_error("Save is missing world object identities");
+    // Legacy checkpoints have no replicated identities. Bootstrap once; the
+    // next save persists this namespace and every allocated serial.
+    objectIds = Coop::ObjectRegistry();
+    for(auto& npc:npcArr)     objectIds.add(Kind::Npc,npc.get());
+    for(auto& npc:npcInvalid) objectIds.add(Kind::Npc,npc.get());
+    for(auto& item:itemArr)   objectIds.add(Kind::Item,item.get());
+    return;
+    }
+  uint32_t version=0, count=0;
+  uint64_t space=0;
+  fin.read(version,space,count);
+  if(version!=1 || count>Coop::ObjectRegistry::MaxRecords || fin.remainingBytes()!=size_t(count)*14)
+    throw std::runtime_error("Invalid world object identity table");
+  std::vector<Coop::ObjectRegistry::Record> records;
+  records.reserve(count);
+  for(uint32_t i=0; i<count; ++i) {
+    uint64_t id=0;
+    uint8_t kind=0, location=0;
+    uint32_t index=0;
+    fin.read(id,kind,location,index);
+    void* object = nullptr;
+    if(location==0 && index==uint32_t(-1)) {} // Explicit tombstone.
+    else if(location==1 && kind==uint8_t(Kind::Npc) && index<npcArr.size())
+      object = npcArr[index].get();
+    else if(location==2 && kind==uint8_t(Kind::Item) && index<itemArr.size())
+      object = itemArr[index].get();
+    else if(location==3 && kind==uint8_t(Kind::Npc) && index<npcInvalid.size())
+      object = npcInvalid[index].get();
+    else throw std::runtime_error("Invalid world object checkpoint reference");
+    records.push_back({id,Kind(kind),object});
+    }
+  objectIds.restore(space,records);
+  // Aliases were rejected by restore; also reject missing live objects instead
+  // of silently allocating a new identity when loading a damaged checkpoint.
+  for(auto& npc:npcArr)
+    if(objectIds.id(Kind::Npc,npc.get())==0) throw std::runtime_error("Missing NPC identity");
+  for(auto& npc:npcInvalid)
+    if(objectIds.id(Kind::Npc,npc.get())==0) throw std::runtime_error("Missing inactive NPC identity");
+  for(auto& item:itemArr)
+    if(objectIds.id(Kind::Item,item.get())==0) throw std::runtime_error("Missing item identity");
+  }
+
+void WorldObjects::saveObjectIds(Serialize& fout) const {
+  using Kind = Coop::ObjectKind;
+  struct Location { uint8_t container; uint32_t index; };
+  std::unordered_map<const void*,Location> locations;
+  auto collect = [&](const auto& objects, Kind kind, uint8_t container) {
+    for(size_t i=0; i<objects.size(); ++i) {
+      const auto object = objects[i].get();
+      if(objectIds.id(kind,object)==0) throw std::runtime_error("Cannot save an unidentified world object");
+      locations.emplace(object,Location{container,uint32_t(i)});
+      }
+    };
+  collect(npcArr,Kind::Npc,1);
+  collect(itemArr,Kind::Item,2);
+  collect(npcInvalid,Kind::Npc,3);
+  fout.setEntry("worlds/",fout.worldName(),"/coop/objects");
+  fout.write(uint32_t(1),objectIds.worldNamespace(),uint32_t(objectIds.entries().size()));
+  for(const auto& [id,record]:objectIds.entries()) {
+    Location location{0,uint32_t(-1)};
+    if(record.object!=nullptr) {
+      const auto it = locations.find(record.object);
+      if(it==locations.end()) throw std::runtime_error("Cannot save a stale world object binding");
+      location = it->second;
+      }
+    fout.write(id,uint8_t(record.kind),location.container,location.index);
+    }
   }
 
 void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
@@ -329,6 +405,7 @@ Npc* WorldObjects::addNpc(size_t npcInstance, std::string_view at) {
     npcInvalid.emplace_back(npc);
     }
 
+  objectIds.add(Coop::ObjectKind::Npc,npc);
   return npc;
   }
 
@@ -345,6 +422,7 @@ Npc* WorldObjects::addNpc(size_t npcInstance, const Vec3& pos) {
   owner.script().invokeRefreshAtInsert(*npc);
 
   npcArr.emplace_back(npc);
+  objectIds.add(Coop::ObjectKind::Npc,npc);
   return npc;
   }
 
@@ -366,6 +444,7 @@ Npc* WorldObjects::insertPlayer(std::unique_ptr<Npc> &&npc, std::string_view at)
   npc->attachToPoint(pos);
   npc->updateTransform();
   npcArr.emplace_back(std::move(npc));
+  objectIds.add(Coop::ObjectKind::Npc,npcArr.back().get());
   return npcArr.back().get();
   }
 
@@ -373,6 +452,7 @@ std::unique_ptr<Npc> WorldObjects::takeNpc(const Npc* ptr) {
   for(size_t i=0; i<npcArr.size(); ++i){
     auto& npc=*npcArr[i];
     if(&npc==ptr){
+      objectIds.remove(Coop::ObjectKind::Npc,ptr);
       auto ret=std::move(npcArr[i]);
       npcArr.erase(npcArr.begin() + int32_t(i));
       return ret;
@@ -618,6 +698,7 @@ Item* WorldObjects::addItem(const zenkit::VItem& vob) {
 std::unique_ptr<Item> WorldObjects::takeItem(Item &it) {
   for(auto& i:itemArr)
     if(i.get()==&it){
+      objectIds.remove(Coop::ObjectKind::Item,&it);
       auto ret=std::move(i);
       i = std::move(itemArr.back());
       itemArr.pop_back();
@@ -690,6 +771,7 @@ Item* WorldObjects::addItem(size_t itemInstance, const Tempest::Vec3& pos, const
 
   it->setPosition (pos.x, pos.y, pos.z);
   it->setDirection(dir.x, dir.y, dir.z);
+  objectIds.add(Coop::ObjectKind::Item,it);
 
   return it;
   }
@@ -712,6 +794,7 @@ Item* WorldObjects::addItemDyn(size_t itemInstance, const Tempest::Matrix4x4& po
   items.add(itemArr.back().get());
 
   it->setObjMatrix(pos);
+  objectIds.add(Coop::ObjectKind::Item,it);
 
   return it;
   }
@@ -991,10 +1074,13 @@ void WorldObjects::resetPositionToTA() {
   for(auto& r:routines)
     r.curState = 0;
 
-  for(auto& i:npcInvalid)
+  for(auto& i:npcInvalid) {
     if(i->handlePtr().use_count()>1)
-      npcArr.push_back(std::move(i)); else
+      npcArr.push_back(std::move(i)); else {
+      objectIds.remove(Coop::ObjectKind::Npc,i.get());
       npcRemoved.push_back(std::move(i));
+      }
+    }
   npcInvalid.clear();
 
   for(auto& i : npcArr) {

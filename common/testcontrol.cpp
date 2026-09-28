@@ -94,6 +94,26 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
     out.Key("world"); str(world->name());
     out.Key("tick"); out.Uint64(world->tickCount());
     out.Key("npc_count"); out.Uint(world->npcCount());
+    const auto& registry = world->objectRegistry();
+    out.Key("object_registry"); out.StartObject();
+    out.Key("namespace"); out.Uint64(registry.worldNamespace());
+    out.Key("next_id"); out.Uint64(registry.nextId());
+    size_t npcs=0, items=0;
+    out.Key("removed"); out.StartArray();
+    for(const auto& [serial,record]:registry.entries()) {
+      if(record.object) {
+        if(record.kind==Coop::ObjectKind::Npc) ++npcs; else ++items;
+        continue;
+        }
+      out.StartObject();
+      out.Key("id"); out.Uint64(serial);
+      out.Key("kind"); str(record.kind==Coop::ObjectKind::Npc ? "npc" : "item");
+      out.EndObject();
+      }
+    out.EndArray();
+    out.Key("live_npcs"); out.Uint64(npcs);
+    out.Key("live_items"); out.Uint64(items);
+    out.EndObject();
     }
   if(npc) {
     auto vec = [&](const Vec3& v) {
@@ -117,6 +137,9 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
     out.Key("hp_max"); out.Int(npc->attribute(ATR_HITPOINTSMAX));
     auto itemInfo = [&](const Item& item, size_t count) {
       out.StartObject();
+      out.Key("object_id"); out.Uint64(world->objectId(&item));
+      const auto index = world->itmId(&item.handle());
+      out.Key("world_index"); out.Int64(index==uint32_t(-1) ? -1 : int64_t(index));
       out.Key("symbol");
       auto sym = world->script().findSymbol(item.clsId());
       str(sym ? sym->name() : "");
@@ -141,6 +164,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       auto pos = actor->position();
       out.StartObject();
       out.Key("id"); out.Uint64(entry.first);
+      out.Key("object_id"); out.Uint64(world->objectId(actor));
       out.Key("npc_index"); out.Uint(world->npcId(actor)); // Diagnostic only; not a persistent ID.
       out.Key("position"); out.StartArray();
       out.Double(pos.x); out.Double(pos.y); out.Double(pos.z); out.EndArray();
@@ -346,6 +370,14 @@ void MainWindow::pollTestControl() {
       const auto cls = game.world()->script().findSymbolIndex("ITPL_HEALTH_HERB_01");
       if(cls==size_t(-1) || !game.world()->addItem(cls,pos))
         throw std::runtime_error("Cannot create plant fixture");
+      }
+    else if(action=="remove_world_item") {
+      if(!cmd.HasMember("object_id") || !cmd["object_id"].IsUint64() ||
+         !cmd.HasMember("namespace") || !cmd["namespace"].IsUint64())
+        throw std::runtime_error("Expected an object namespace and ID");
+      auto item = game.world()->itemByObjectId(cmd["namespace"].GetUint64(),cmd["object_id"].GetUint64());
+      if(!item) throw std::runtime_error("Unknown or removed world item identity");
+      game.world()->removeItem(*item);
       }
     else if(action=="console") {
       if(!cmd.HasMember("command") || !cmd["command"].IsString())

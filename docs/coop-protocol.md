@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 2 (N05)
+# Co-op wire protocol, version 2 (N06)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -20,6 +20,12 @@ that a character has been assigned. Version-1 peers are rejected explicitly.
 N05 enables the already-defined `Welcome` message without changing its encoding;
 the wire version remains 2. The exact executable fingerprint prevents an older
 engine implementation from passing the compatibility handshake.
+
+N06 adds a persistent, typed world-object registry and checkpoint format, without
+changing the wire messages. See [world object identities](coop-objects.md) for
+namespaces, player-role versus NPC identity, tombstones, save-local locators,
+legacy migration and the generation checks required by future snapshot/update
+messages. Runtime array indexes must not become network object references.
 
 ## Encoding and frame header
 
@@ -372,7 +378,8 @@ checks live and saved NPC reuse, separate inventory/HP/poses and script identity
 Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
 assets, start a GUI, or require initialized engine submodules. It runs 13 codec
-cases everywhere and seven connection/fingerprint cases on macOS; the latter use
+cases plus four object-registry cases everywhere, and seven connection/fingerprint
+cases on macOS (24 total); the latter use
 loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh

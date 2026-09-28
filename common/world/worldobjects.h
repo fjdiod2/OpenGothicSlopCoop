@@ -10,6 +10,7 @@
 #include "game/gametime.h"
 #include "game/perceptionmsg.h"
 #include "game/constants.h"
+#include "game/objectregistry.h"
 
 class Npc;
 class Item;
@@ -76,6 +77,7 @@ class WorldObjects final {
     size_t         itmCount()    const { return itemArr.size(); }
     Item&          itm(size_t i)       { return *itemArr[i];    }
     uint32_t       itmId(const void* ptr) const;
+    const Coop::ObjectRegistry& objectRegistry() const { return objectIds; }
 
     size_t         mobsiCount()    const { return interactiveObj.size();        }
     Interactive&   mobsi(size_t i)       { return **(interactiveObj.begin()+i); }
@@ -158,6 +160,9 @@ class WorldObjects final {
       };
 
     World&                             owner;
+    Coop::ObjectRegistry               objectIds;
+    void loadObjectIds(Serialize& fin);
+    void saveObjectIds(Serialize& fout) const;
 
     std::vector<CollisionZone*>        collisionZn;
     std::vector<std::unique_ptr<Vob>>  rootVobs;

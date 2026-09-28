@@ -33,7 +33,7 @@ class SaveGameHeader;
 class Serialize {
   public:
     enum Version : uint16_t {
-      Current    = 55,
+      Current    = 56,
       MinVersion = 36,
 
       Last_2025  = 53,
@@ -74,6 +74,7 @@ class Serialize {
     // raw
     void writeBytes(const void* v,size_t sz);
     void readBytes (void* v,size_t sz);
+    size_t remainingBytes() const { return entryBuf.size()-size_t(readOffset); }
 
     template<class ... Arg>
     void write(const Arg& ... a){

@@ -44,6 +44,15 @@ class World final {
     uint64_t             playerId(const Npc* npc) const;
     Npc*                 addPlayer(uint64_t id);
     const std::map<uint64_t, Npc*>& players() const { return playerRoster; }
+    const Coop::ObjectRegistry& objectRegistry() const { return wobj.objectRegistry(); }
+    uint64_t objectId(const Npc* npc) const { return objectRegistry().id(Coop::ObjectKind::Npc,npc); }
+    uint64_t objectId(const Item* item) const { return objectRegistry().id(Coop::ObjectKind::Item,item); }
+    Npc* npcByObjectId(uint64_t space, uint64_t id) const {
+      return static_cast<Npc*>(objectRegistry().resolve(space,id,Coop::ObjectKind::Npc));
+      }
+    Item* itemByObjectId(uint64_t space, uint64_t id) const {
+      return static_cast<Item*>(objectRegistry().resolve(space,id,Coop::ObjectKind::Item));
+      }
     void                 postInit();
     std::string_view     name() const { return wname; }
 

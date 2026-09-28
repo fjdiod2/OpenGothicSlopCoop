@@ -4,7 +4,8 @@ project(OpenGothicProtocolTests LANGUAGES CXX)
 # Standalone: no renderer, engine dependencies, submodules or Gothic assets.
 option(COOP_SANITIZERS "Run protocol tests with address/undefined sanitizers" OFF)
 add_executable(coop-protocol-tests protocol_test.cpp ../../common/network/protocol.cpp)
-set(COOP_TEST_TARGETS coop-protocol-tests)
+add_executable(coop-object-tests objectregistry_test.cpp ../../common/game/objectregistry.cpp)
+set(COOP_TEST_TARGETS coop-protocol-tests coop-object-tests)
 if(APPLE)
   add_executable(coop-connection-tests connection_test.cpp ../../common/network/protocol.cpp
                  ../../common/network/session.cpp ../../common/network/fingerprint.cpp)
@@ -30,6 +31,10 @@ endif()
 endforeach()
 
 enable_testing()
+foreach(case lifecycle checkpoint malformed churn)
+  add_test(NAME objects-${case} COMMAND coop-object-tests ${case})
+  set_tests_properties(objects-${case} PROPERTIES TIMEOUT 20)
+endforeach()
 foreach(case golden message-types fragments combined malformed-header malformed-payload
              encode-validation eof receive-limits write-limits partial-writes stream-stress malformed-stress)
   add_test(NAME protocol-${case} COMMAND coop-protocol-tests ${case})
