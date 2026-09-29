@@ -516,6 +516,43 @@ injects genuinely delayed old input/poses. After rejecting these, both controlle
 can move again. A second load closes an open host inventory and requires another
 fresh snapshot. The disk checkpoint must remain byte-identical throughout.
 
+### Restart and rejoin from disk (N15)
+
+The parent tools repository's `restart-rejoin` scenario combines saving,
+process shutdown, disk loading and fresh snapshot transfer. Run it with the
+installed game assets and the native engine build:
+
+```sh
+python3 tools/run-gothic-tests.py --scenario restart-rejoin
+```
+
+The host and companion start with different HP and inventory counts, prepared
+through host-side world fixtures and normal pickup controls. Both windows move
+their own actors, then the host commits a connected checkpoint. Both processes
+exit before a new host loads slot 99 and a fresh guest joins without a local
+save. A second cycle kills the guest while moving, verifies control release,
+collects one more companion item on the host and saves while disconnected.
+Both processes are replaced again before testing that offline checkpoint.
+
+Each cycle checks the persisted player roles, typed NPC identities and world
+namespace; exact inventory symbols/counts/equipped flags and HP; position within
+five game units and heading within 0.2 degrees of the committed checkpoint.
+Once held at the same acknowledged pose revision, the two views must agree
+within 0.01 units/degrees and have identical animation descriptors. It also
+checks fresh process sessions and connection generations, cleared input counters,
+the host snapshot's independent SHA-256 against both reported digests, local
+camera/HUD ownership, guest campaign isolation and movement through both windows
+after each rejoin. Loading/joining must leave checkpoint bytes unchanged.
+Checkpoint copies, process logs, state comparisons and screenshots from both
+windows are retained by the runner; see the parent project's `TESTING.md` for
+recorded acceptance and regression evidence.
+
+This completes the two-window persistence milestone. The tested scope is
+loopback movement/poses plus host-owned saves and fresh snapshots. Live pickup,
+equipment, combat, dialogue/quest effects and joint region changes remain
+separate gameplay work; preparing inventories on the host does not establish
+guest pickup replication. N15 changes no wire or checkpoint layout (4/56).
+
 ## Starting and observing a connection
 
 Pass exactly one of these explicit startup options:
