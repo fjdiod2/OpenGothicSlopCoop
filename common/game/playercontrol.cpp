@@ -643,6 +643,7 @@ bool PlayerControl::tickMove(uint64_t dt) {
 
   if(pl==nullptr)
     return true;
+  if(dlg.isActive()) { clearInput(); return true; }
 
   implMove(dt);
 

@@ -217,6 +217,9 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
         str(symbol ? symbol->name() : "");
         };
       out.Key("dialogue"); out.StartObject();
+      out.Key("owner"); out.Uint64(dialogs.owner());
+      out.Key("conversation"); out.Uint64(dialogs.conversation());
+      out.Key("revision"); out.Uint64(dialogs.revision());
       out.Key("choices_active"); out.Bool(view.choicesActive);
       out.Key("selection"); out.Uint64(view.selection);
       out.Key("player"); out.Uint64(world->objectId(view.player));
@@ -712,7 +715,7 @@ void MainWindow::pollTestControl() {
         throw std::runtime_error("Dialogue NPC fixture requires held offline gameplay");
       if(!cmd.HasMember("symbol") || !cmd["symbol"].IsString()) throw std::runtime_error("Expected NPC instance");
       const std::string_view name=cmd["symbol"].GetString();
-      if(name!="VLK_413_BOSPER" && name!="VLK_440_BARTOK" && name!="VLK_449_LARES") throw std::runtime_error("Unsupported dialogue fixture NPC");
+      if(name!="VLK_413_BOSPER" && name!="VLK_440_BARTOK" && name!="VLK_449_LARES" && name!="PAL_250_GAROND") throw std::runtime_error("Unsupported dialogue fixture NPC");
       const auto instance=world->script().findSymbolIndex(name);
       if(instance==size_t(-1)) throw std::runtime_error("Missing original NPC definition");
       for(uint32_t i=0;i<world->npcCount();++i)
@@ -743,6 +746,16 @@ void MainWindow::pollTestControl() {
       // holds Vatras's ornament. No host item, info history or reward is granted.
       script.findSymbol("KAPITEL")->set_int(3);
       lares->addItem(item,1);
+      }
+    else if(action=="fixture_garond_report") {
+      if(!game.world()->isAuthoritative() || runtimeMode!=R_Suspended || dialogs.isActive() ||
+         network.status().role!=Coop::Role::Disabled)
+        throw std::runtime_error("Garond prerequisites require held offline gameplay");
+      auto& script=game.world()->script();
+      script.findSymbol("KAPITEL")->set_int(2);
+      script.findSymbol("ORE_COUNTER")->set_int(3);
+      script.findSymbol("MIS_SCOUTMINE")->set_int(script.findSymbol("LOG_RUNNING")->get_int());
+      script.log_createtopic("Evidence",0);
       }
     else if(action=="fixture_quest") {
       auto& script = game.world()->script();

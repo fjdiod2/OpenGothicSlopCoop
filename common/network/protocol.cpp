@@ -42,7 +42,7 @@ size_t bodySize(MessageType type) {
     case MessageType::Hello:    return 64;
     case MessageType::Accepted: return 64;
     case MessageType::Welcome:  return 0;
-    case MessageType::Input:    return 33;
+    case MessageType::Input:    return 66;
     case MessageType::StateAck: return 8;
     case MessageType::Reject:   return 2;
     case MessageType::SnapshotBegin: return 40;
@@ -158,6 +158,16 @@ void validatePayload(const Message& message) {
       invalid(ProtocolErrorCode::Size,"Invalid snapshot chunk");
     }
   if(auto input = std::get_if<Input>(&message.payload)) {
+    const bool hasDialog = input->dialogueAction!=0;
+    if(input->dialogueAction>5 ||
+       (!hasDialog && (input->dialogueWorld || input->dialogueTarget || input->dialogueId || input->dialogueRevision)) ||
+       (hasDialog && (!input->dialogueWorld || input->buttons || input->lookX || input->lookY || input->pickupItem || input->equipmentItem)) ||
+       (input->dialogueAction==1 && (!input->dialogueTarget || input->dialogueId || input->dialogueRevision)) ||
+       (input->dialogueAction>1 && (!input->dialogueId || !input->dialogueRevision)) ||
+       (input->dialogueAction==2 && (!input->dialogueTarget || input->dialogueTarget>uint64_t(UINT32_MAX)+1)) ||
+       (input->dialogueAction>2 && input->dialogueTarget))
+      invalid(ProtocolErrorCode::Fields,"Invalid dialogue intent");
+
     if(input->equipmentAction>3 || (input->equipmentItem==0)!=(input->equipmentAction==0) ||
        input->equipmentItem>uint64_t(UINT32_MAX)+1 || (input->equipmentItem!=0 && input->pickupItem!=0))
       invalid(ProtocolErrorCode::Fields,"Invalid equipment intent");
@@ -326,7 +336,7 @@ Message decode(std::span<const uint8_t> bytes) {
       message.payload = SnapshotChunk{get(bytes,44,8),Bytes(bytes.begin()+52,bytes.end())};
       break;
     case MessageType::Input:
-      message.payload = Input{uint32_t(get(bytes,44,4)),getSigned(bytes,48),getSigned(bytes,50),get(bytes,52,8),get(bytes,60,8),get(bytes,68,8),uint8_t(get(bytes,76,1))};
+      message.payload = Input{uint32_t(get(bytes,44,4)),getSigned(bytes,48),getSigned(bytes,50),get(bytes,52,8),get(bytes,60,8),get(bytes,68,8),uint8_t(get(bytes,76,1)),uint8_t(get(bytes,77,1)),get(bytes,78,8),get(bytes,86,8),get(bytes,94,8),get(bytes,102,8)};
       break;
     case MessageType::StateAck:
       message.payload = StateAck{get(bytes,44,8)};
@@ -459,6 +469,9 @@ Bytes encode(const Message& message) {
       put(bytes,input.pickupItem,8);
       put(bytes,input.equipmentItem,8);
       put(bytes,input.equipmentAction,1);
+      put(bytes,input.dialogueAction,1);
+      put(bytes,input.dialogueWorld,8); put(bytes,input.dialogueTarget,8);
+      put(bytes,input.dialogueId,8); put(bytes,input.dialogueRevision,8);
       break;
       }
     case MessageType::StateAck:

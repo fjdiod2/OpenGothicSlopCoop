@@ -40,7 +40,7 @@ foreach(case lifecycle checkpoint malformed churn)
   add_test(NAME objects-${case} COMMAND coop-object-tests ${case})
   set_tests_properties(objects-${case} PROPERTIES TIMEOUT 20)
 endforeach()
-foreach(case story-projection golden pickup-transfers weapon-equipment consumables combat-state message-types fragments combined malformed-header malformed-payload
+foreach(case dialogue-intents story-projection golden pickup-transfers weapon-equipment consumables combat-state message-types fragments combined malformed-header malformed-payload
              encode-validation eof receive-limits write-limits partial-writes stream-stress malformed-stress)
   add_test(NAME protocol-${case} COMMAND coop-protocol-tests ${case})
   set_tests_properties(protocol-${case} PROPERTIES TIMEOUT 20)

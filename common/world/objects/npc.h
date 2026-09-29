@@ -253,6 +253,8 @@ class Npc final {
     Attitude  tempAttitude() const { return tmpAttitude; }
 
     void      startDialog(Npc& other);
+    bool      beginStoryDialog(Npc& story);
+    void      resetDialogueOutput();
     bool      startState(ScriptFn id, std::string_view wp);
     bool      startState(ScriptFn id, std::string_view wp, gtime endTime, bool noFinalize);
     void      clearState(bool noFinalize);

@@ -872,7 +872,14 @@ Npc* WorldObjects::findNpcNear(const Npc& pl, Npc* def, const SearchOpt& opt) {
     if(def && testObj(*def,pl,xopt))
       return def;
     }
-  auto r = findObj(npcNear,pl,opt);
+  // Replica worlds do not run the AI tick that maintains npcNear. Focus must
+  // still inspect their snapshot actors without enabling guest simulation.
+  std::vector<Npc*> replicaCandidates;
+  if(!owner.isAuthoritative()) {
+    replicaCandidates.reserve(npcArr.size());
+    for(auto& npc:npcArr) replicaCandidates.push_back(npc.get());
+    }
+  auto r = findObj(owner.isAuthoritative() ? npcNear : replicaCandidates,pl,opt);
   if(r!=nullptr && (!Gothic::options().hideFocus || !r->isDead() ||
                      r->inventory().iterator(Inventory::T_Ransack).isValid()))
     return r;

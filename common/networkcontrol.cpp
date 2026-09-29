@@ -256,8 +256,20 @@ void MainWindow::networkKey(Tempest::KeyEvent& event, bool down) {
     if(interacting) buttons &= Coop::Melee; // Unarmed action+forward is pickup.
     }
   Item* item = nullptr;
+  Npc* npc = nullptr;
   if(pressed && action==KeyCodec::ActionGeneric && ws==WeaponState::NoWeapon && game.world())
-    item = game.world()->findFocus(*game.localPlayer(),Focus()).item;
+    {
+    const auto focus=game.world()->findFocus(*game.localPlayer(),Focus());
+    item=focus.item; npc=focus.npc;
+    }
+  if(npc && !item && !npc->isPlayer() && !npc->isDown()) {
+    networkButtons=0;
+    Coop::Input input;
+    input.dialogueAction=1; input.dialogueWorld=game.world()->objectRegistry().worldNamespace();
+    input.dialogueTarget=game.world()->objectId(npc);
+    if(!network.sendInput(input)) network.invalidate("input_queue_full");
+    event.accept(); return;
+    }
   if(buttons!=networkButtons || item) {
     networkButtons = buttons;
     sendNetworkInput(0,0,item ? game.world()->objectRegistry().worldNamespace() : 0,
@@ -302,6 +314,7 @@ void MainWindow::tickNetworkInput(bool apply) {
   const auto controlGeneration = status.boundPlayer==PlayerIdentity::Companion &&
                                  status.snapshotState=="ready" ? status.generation : 0;
   if(networkControlGeneration!=controlGeneration) {
+    dialogs.cancelGuest();
     networkKeys.clear();
     networkButtons = remoteButtons = 0;
     networkInstalledInput = 0;
@@ -336,6 +349,22 @@ void MainWindow::tickNetworkInput(bool apply) {
   float lookX = 0, lookY = 0;
   while(auto message = network.takeInput()) {
     auto input = std::get<Coop::Input>(message->payload);
+    networkInstalledInput = message->sequence;
+    if(input.dialogueAction) {
+      if(input.dialogueWorld==game.world()->objectRegistry().worldNamespace() &&
+         !video.isActive() && !inventory.isActive() && game.world()->currentCs()==nullptr) {
+        if(input.dialogueAction==1 && !dialogs.isActive()) {
+          auto stage=game.world()->playerById(2);
+          auto npc=game.world()->npcByObjectId(input.dialogueWorld,input.dialogueTarget);
+          if(npc && game.world()->findFocus(*stage,Focus()).npc==npc && dialogs.beginGuest(*npc)) {
+            clearInput(); remoteButtons=0;
+            }
+          }
+        else dialogs.remoteInput(input);
+        }
+      continue;
+      }
+    if(dialogs.isActive()) { control.clearInput(); remoteButtons=0; continue; }
     const auto ws=game.world()->playerById(PlayerIdentity::Companion)->weaponState();
     if(ws!=WeaponState::Fist && ws!=WeaponState::W1H && ws!=WeaponState::W2H) input.buttons &= ~Coop::Attack;
     for(const auto& [action,bit]:networkActions) {

@@ -4312,6 +4312,25 @@ void Npc::startDialog(Npc& pl) {
     setOther(&pl);
   }
 
+bool Npc::beginStoryDialog(Npc& story) {
+  if(owner.isInDialog() || isPlayer() || isDown() || story.isDown()) return false;
+  auto p=owner.script().openDlgOuput(story,*this);
+  if(!p) return false;
+  clearAiQueue();
+  stopWalking();
+  outputPipe=p;
+  story.outputPipe=p;
+  setOther(&story);
+  story.setOther(this);
+  return true;
+  }
+
+void Npc::resetDialogueOutput() {
+  clearAiQueue();
+  setAiOutputBarrier(0,false);
+  outputPipe=owner.script().openAiOuput();
+  }
+
 bool Npc::perceptionProcess(Npc &pl) {
   static bool dbg = false;
   static int  kId = -1;

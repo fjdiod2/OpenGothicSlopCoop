@@ -9,6 +9,7 @@
 
 #include "game/gamescript.h"
 #include "camera.h"
+#include "network/protocol.h"
 
 class Npc;
 class Interactive;
@@ -26,6 +27,13 @@ class DialogMenu : public Tempest::Widget {
     void onWorldChanged();
     void saveNetwork(Serialize& out) const;
     void applyNetwork(Serialize& in);
+    uint64_t owner() const { return conversationOwner; }
+    uint64_t conversation() const { return conversationId; }
+    uint64_t revision() const { return conversationRevision; }
+    bool beginGuest(Npc& npc);
+    void remoteInput(const Coop::Input& input);
+    void cancelGuest();
+    std::function<void(const Coop::Input&)> sendInput;
 
     bool isMobsiDialog() const;
     void dialogCamera(Camera& camera);
@@ -116,6 +124,9 @@ class DialogMenu : public Tempest::Widget {
       };
 
     bool onStart(Npc& pl,Npc& other);
+    bool guestChoiceAllowed(const GameScript::DlgChoice& entry) const;
+    void sendRemote(uint8_t action, uint64_t target=0);
+    bool localOwner() const;
     void onEntry(const GameScript::DlgChoice& e);
     void onDoneText();
     void close();
@@ -147,6 +158,8 @@ class DialogMenu : public Tempest::Widget {
     std::vector<uint32_t>               except;
 
     bool                                replica=false, replicaChoices=false;
+    uint64_t                            conversationOwner=0, conversationId=0, conversationRevision=0;
+    Npc*                                stagedPlayer=nullptr;
     State                               state=State::Idle;
     Entry                               current;
     Tempest::SoundEffect                currentSnd;

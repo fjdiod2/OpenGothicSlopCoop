@@ -177,7 +177,8 @@ bool DialogMenu::isMobsiDialog() const {
 
 void DialogMenu::dialogCamera(Camera& camera) {
   if(pl && other){
-    auto p0 = pl   ->cameraBone();
+    auto stage=stagedPlayer ? stagedPlayer : pl;
+    auto p0 = stage->cameraBone();
     auto p1 = other->cameraBone();
     camera.setTarget((p0+p1)*0.5f + Vec3(0,50,0));
     p0 -= p1;
@@ -191,7 +192,7 @@ void DialogMenu::dialogCamera(Camera& camera) {
       if(curentIsPl) {
         a = other->rotation()-45;
         } else {
-        a = pl->rotation()+45;
+        a = stage->rotation()+45;
         }
 
       camera.setDialogDistance(l);
@@ -201,6 +202,11 @@ void DialogMenu::dialogCamera(Camera& camera) {
   }
 
 void DialogMenu::openPipe(Npc &player, Npc &npc, AiOuputPipe *&out) {
+  if(isActive()) { out=nullptr; return; }
+  conversationOwner=1;
+  ++conversationId;
+  conversationRevision=1;
+  stagedPlayer=&player;
   out    = &pipe;
   pl     = &player;
   other  = &npc;
@@ -210,7 +216,7 @@ void DialogMenu::openPipe(Npc &player, Npc &npc, AiOuputPipe *&out) {
 bool DialogMenu::isNpcInDialog(const Npc* npc) const {
   if(state==State::Idle)
     return false;
-  return npc==pl || npc==other || npc==nullptr;
+  return npc==pl || npc==other || npc==stagedPlayer || npc==nullptr;
   }
 
 bool DialogMenu::aiOutput(Npc &npc, std::string_view msg) {
@@ -230,6 +236,7 @@ bool DialogMenu::aiOutput(Npc &npc, std::string_view msg) {
       pl->stopDlgAnim();
     }
 
+  ++conversationRevision;
   current.txt     = Gothic::inst().messageByName(msg);
   current.msgTime = Gothic::inst().messageTime(msg);
   current.time    = current.msgTime + (dlgAnimation ? ANIM_TIME*2 : 0);
@@ -272,6 +279,11 @@ bool DialogMenu::hasContent() const {
 
 bool DialogMenu::onStart(Npc &p, Npc &ot) {
   choice         = ot.dialogChoices(p,except,state==State::PreStart);
+  // Automatic important infos cannot be selected safely by a remote owner unless audited.
+  if(conversationOwner==2)
+    std::erase_if(choice,[&](const auto& c) { return c.title.empty() && !guestChoiceAllowed(c); });
+  if(conversationOwner==2 && choice.empty()) choice=ot.dialogChoices(p,except,false);
+  ++conversationRevision;
   state          = State::Active;
   depth          = 0;
   curentIsPl     = true;
@@ -331,6 +343,7 @@ void DialogMenu::print(std::string_view msg) {
 
 void DialogMenu::onDoneText() {
   choice = Gothic::inst().updateDialog(selected,*pl,*other);
+  ++conversationRevision;
   dlgSel = 0;
   if(choice.size()==0){
     if(depth>0) {
@@ -345,6 +358,9 @@ void DialogMenu::close() {
   auto prevPl  = pl;
   auto prevNpc = other;
 
+  conversationOwner=0;
+  stagedPlayer=nullptr;
+  ++conversationRevision;
   pl=nullptr;
   other=nullptr;
   depth=0;
@@ -402,6 +418,11 @@ void DialogMenu::skipPhrase() {
 
 void DialogMenu::onEntry(const GameScript::DlgChoice &e) {
   if(pl && other) {
+    if(conversationOwner==2 && !guestChoiceAllowed(e)) {
+      print("This choice requires the host.");
+      return;
+      }
+    ++conversationRevision;
     selected = e;
     depth    = 1;
     dlgTrade = e.isTrade;
@@ -539,7 +560,12 @@ void DialogMenu::onSelect() {
   }
 
 void DialogMenu::mouseDownEvent(MouseEvent &event) {
-  if(replica) { event.accept(); return; }
+  if(!localOwner()) { event.accept(); return; }
+  if(replica) {
+    if(event.button==MouseEvent::ButtonLeft && dlgSel<choice.size()) sendRemote(2,uint64_t(choice[dlgSel].scriptFn)+1);
+    if(event.button==MouseEvent::ButtonRight) sendRemote(3);
+    event.accept(); return;
+    }
   if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
     event.ignore();
     return;
@@ -554,7 +580,8 @@ void DialogMenu::mouseDownEvent(MouseEvent &event) {
   }
 
 void DialogMenu::mouseWheelEvent(MouseEvent &e) {
-  if(replica) { e.accept(); return; }
+  if(!localOwner()) { e.accept(); return; }
+  if(replica) { sendRemote(e.delta>0 ? 4 : 5); e.accept(); return; }
   if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
     e.ignore();
     return;
@@ -569,7 +596,14 @@ void DialogMenu::mouseWheelEvent(MouseEvent &e) {
   }
 
 void DialogMenu::keyDownEvent(KeyEvent &e) {
-  if(replica) { e.accept(); return; }
+  if(!localOwner()) { e.accept(); return; }
+  if(replica) {
+    if(e.key==Event::K_Return && dlgSel<choice.size()) sendRemote(2,uint64_t(choice[dlgSel].scriptFn)+1);
+    if(e.key==Event::K_ESCAPE) sendRemote(3);
+    if(e.key==Event::K_Up || e.key==Event::K_W) sendRemote(4);
+    if(e.key==Event::K_Down || e.key==Event::K_S) sendRemote(5);
+    e.accept(); return;
+    }
   if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
     e.ignore();
     return;
@@ -606,16 +640,21 @@ void DialogMenu::keyUpEvent(KeyEvent &event) {
 
 void DialogMenu::saveNetwork(Serialize& out) const {
   auto world=Gothic::inst().world();
+  out.write(conversationOwner,conversationId,conversationRevision,world->objectId(stagedPlayer));
   out.write(isActive(),isChoiceMenuActive(),curentIsPl,
             world->objectId(pl),world->objectId(other),uint32_t(dlgSel),
             current.time>0 ? current.txt : std::string(),uint32_t(choice.size()));
-  for(const auto& c:choice) out.write(c.title,c.scriptFn);
+  for(const auto& c:choice) {
+    const auto title=conversationOwner==2 && !guestChoiceAllowed(c) ? c.title+" [Host only]" : c.title;
+    out.write(title,c.scriptFn);
+    }
   }
 
 void DialogMenu::applyNetwork(Serialize& in) {
   if(!Gothic::inst().isGuest()) throw std::runtime_error("Dialogue projection is guest-only");
   bool active=false, choicesActive=false, speaker=false;
-  uint64_t actor=0, npc=0;
+  uint64_t actor=0, npc=0, owner=0, id=0, revision=0, stage=0;
+  in.read(owner,id,revision,stage);
   uint32_t selection=0, count=0;
   std::string text;
   in.read(active,choicesActive,speaker,actor,npc,selection,text,count);
@@ -633,6 +672,11 @@ void DialogMenu::applyNetwork(Serialize& in) {
   if((active && (!player || player!=world->playerById(1) || !otherNpc)) ||
      (count>0 && selection>=count) || (choicesActive && (!active || count==0)))
     throw std::runtime_error("Invalid dialogue owner or selection");
+  if((active && (owner<1 || owner>2 || !id || !revision ||
+      world->npcByObjectId(world->objectRegistry().worldNamespace(),stage)!=world->playerById(owner))) || (!active && owner))
+    throw std::runtime_error("Invalid dialogue control lease");
+  conversationOwner=owner; conversationId=id; conversationRevision=revision;
+  stagedPlayer=world->npcByObjectId(world->objectRegistry().worldNamespace(),stage);
   replica=true;
   replicaChoices=choicesActive;
   state=active ? State::Active : State::Idle;
@@ -647,4 +691,77 @@ void DialogMenu::applyNetwork(Serialize& in) {
   curentIsPl=speaker;
   choiceAnimTime=choicesActive ? ANIM_TIME : 0;
   update();
+  }
+
+
+bool DialogMenu::localOwner() const {
+  return !isActive() || conversationOwner==(Gothic::inst().isGuest() ? 2u : 1u);
+  }
+
+bool DialogMenu::guestChoiceAllowed(const GameScript::DlgChoice& e) const {
+  if(e.isTrade) return false;
+  const auto symbol=Gothic::inst().world()->script().findSymbol(e.scriptFn);
+  if(!symbol) return false;
+  // Stage G09 supports only audited shared-story routes. This also denies the
+  // entire Garond chapter turn-in before knowledge, rewards or deferred flags.
+  const std::string_view allowed[]={
+    "DIA_BOSPER_HALLO_INFO", "DIA_BOSPER_SEEKWORK_INFO", "DIA_BOSPER_BARTOK_INFO",
+    "DIA_BOSPER_BOGENRUNNING_INFO", "DIA_BOSPER_BOGENSUCCESS_INFO", "DIA_BOSPER_EXIT_INFO",
+    "DIA_BARTOK_HALLO_INFO", "DIA_BARTOK_BOSPER_INFO", "DIA_BARTOK_EXIT_INFO",
+    "DIA_LARES_HALLO_INFO", "DIA_LARES_HALLO_YES", "DIA_LARES_HALLO_LEE",
+    "DIA_LARES_KAP3_EXIT_INFO", "DIA_ADDON_LARES_PATCH_INFO", "DIA_GAROND_EXIT_INFO"};
+  return std::find(std::begin(allowed),std::end(allowed),symbol->name())!=std::end(allowed);
+  }
+
+bool DialogMenu::beginGuest(Npc& npc) {
+  auto world=Gothic::inst().world();
+  if(!world || !world->isAuthoritative() || isActive() || trade.isActive()) return false;
+  auto story=world->playerById(1), stage=world->playerById(2);
+  if(!story || !stage || story->isDown() || story->interactive() || story->isAiBusy() ||
+     stage->isDown() || stage->isInAir() || stage->weaponState()!=WeaponState::NoWeapon ||
+     stage->interactive() || npc.isDown() || npc.isPlayer()) return false;
+  auto symbol=world->script().findSymbol(npc.instanceSymbol());
+  if(!symbol) return false;
+  const auto name=symbol->name();
+  if(name!="VLK_413_BOSPER" && name!="VLK_440_BARTOK" && name!="VLK_449_LARES" && name!="PAL_250_GAROND") return false;
+  if(!npc.beginStoryDialog(*story)) return false;
+  conversationOwner=2;
+  stagedPlayer=stage;
+  stage->stopWalking();
+  npc.setDirection(stage->position()-npc.position());
+  return true;
+  }
+
+void DialogMenu::sendRemote(uint8_t action, uint64_t target) {
+  if(!sendInput || !replica || conversationOwner!=2) return;
+  Coop::Input input;
+  input.dialogueAction=action;
+  input.dialogueWorld=Gothic::inst().world()->objectRegistry().worldNamespace();
+  input.dialogueTarget=target; input.dialogueId=conversationId; input.dialogueRevision=conversationRevision;
+  sendInput(input);
+  }
+
+void DialogMenu::remoteInput(const Coop::Input& input) {
+  if(replica || !isActive() || conversationOwner!=2 || input.dialogueId!=conversationId ||
+     input.dialogueRevision!=conversationRevision) return;
+  if(input.dialogueAction==3) { skipPhrase(); return; }
+  if(!isChoiceMenuActive()) return;
+  if(input.dialogueAction==4 || input.dialogueAction==5) {
+    dlgSel=(dlgSel+(input.dialogueAction==4 ? choice.size()-1 : size_t(1)))%choice.size();
+    update();
+    }
+  else if(input.dialogueAction==2) {
+    for(size_t i=0;i<choice.size();++i) if(uint64_t(choice[i].scriptFn)+1==input.dialogueTarget) {
+      dlgSel=i; onSelect(); return;
+      }
+    }
+  }
+
+void DialogMenu::cancelGuest() {
+  if(conversationOwner!=2) return;
+  if(!replica) {
+    if(pl) pl->resetDialogueOutput();
+    if(other) other->resetDialogueOutput();
+    }
+  close();
   }

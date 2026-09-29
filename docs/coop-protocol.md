@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 9 (G08)
+# Co-op wire protocol, version 10 (G09)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -15,6 +15,8 @@ N07 makes the guest a presentation-only process; N08 transfers a host checkpoint
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
 
+Version 10 appends dialogue intent to `Input` and a control lease to the story
+projection. Version-9 peers are rejected; checkpoints remain version 56.
 Version 9 appends an optional host dialogue/story projection to `Poses`. Version-8
 peers are rejected. Checkpoints remain version 56; the projection is transient.
 Version 8 adds audited consumable-use intent, ordered inventory removals and
@@ -62,7 +64,7 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `9` |
+| 8 | 2 | Version | Exactly `10` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
@@ -82,7 +84,7 @@ animation-name/unused slots specified below.
 | --- | --- | --- | --- | --- |
 | 1 | `Hello` | Guest → host | 108 | `0 / 0 / 0 / 0` |
 | 2 | `Welcome` | Host → guest | 44 | `nonzero / nonzero / 0 / nonzero` |
-| 3 | `Input` | Guest → host | 77 | `nonzero / nonzero / nonzero / 0` |
+| 3 | `Input` | Guest → host | 110 | `nonzero / nonzero / nonzero / 0` |
 | 4 | `StateAck` | Host → guest | 52 | `nonzero / nonzero / 0 / nonzero` |
 | 5 | `Reject` | Host → guest | 46 | `0 / 0 / 0 / 0` |
 | 6 | `Accepted` | Host → guest | 108 | `nonzero / 0 / 0 / 0` |
@@ -210,6 +212,7 @@ EOF and cancellation while the application owns a completed snapshot.
 | 60 | 8 | Pickup target typed item ID, or zero |
 | 68 | 8 | Inventory instance + 1, or zero |
 | 76 | 1 | Inventory action: 0 none, 1 equip, 2 unequip, 3 consume once |
+| 77–109 | 33 | Dialogue intent; see [G09 fields](#guest-initiated-host-story-dialogue-g09) |
 
 | Bit | Mask | Action |
 | --- | --- | --- |
@@ -1075,16 +1078,18 @@ Connections are loopback-only. Internet transport/security is outside N04.
 
 ## Golden example
 
-This 77-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
+This 110-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 0000004d 0009 0003
+4f474350 0000006e 000a 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
 0000000000000000 0000000000000000
 0000000000000000 00
+00 0000000000000000 0000000000000000
+0000000000000000 0000000000000000
 ```
 
 The test suite checks this literal against both encoding and decoding. It also
@@ -1152,12 +1157,10 @@ See parent `TESTING.md` for run artifacts and regression results.
 
 ## Host-controlled dialogue and story projection (G08)
 
-The host remains the sole conversation owner and runs the unchanged original
-conditions/actions with canonical host `HERO`/`OTHER`. The guest receives display
-state, not executable dialogue requests. There is no accepted guest choice opcode
-in version 9: Enter, arrows, Escape and mouse selection in a mirrored conversation
-cannot select/skip host dialogue. Existing sequenced input retains its duplicate,
-generation and direction validation. G09 will introduce explicit guest ownership.
+For host-initiated conversations the host owns the choices and runs the unchanged
+original conditions/actions with canonical host `HERO`/`OTHER`. The guest cannot
+select or skip them. G09 adds guest initiation below; it preserves this story actor
+and the existing sequence, generation and direction validation.
 
 `Poses` ends with a big-endian u32 archive length and that many bytes. A zero
 length means unchanged story state. A nonempty value is a compatible engine
@@ -1169,6 +1172,8 @@ The whole frame, including a full NPC batch, remains below the 64 KiB cap.
 
 The entry contains, in order:
 
+- In version 10: four u64 values for control owner (0/1/2), conversation ID,
+  menu/subtitle revision and staging actor object ID. These use `Serialize` format.
 - Dialogue active/choices-visible/speaker-is-host flags; host and NPC object IDs;
   selected row; current subtitle; choice count and pairs of title/function symbol.
 - Existing quest-log, known-info and guild-attitude records (`saveQuests`).
@@ -1209,3 +1214,62 @@ Dialogue voice playback and transient reward popups are not mirrored in G08;
 the guest receives subtitle text, choices and durable reward state.
 A projection exceeding its limits terminates replication explicitly rather than
 silently truncating the journal or inventories.
+
+
+## Guest-initiated host-story dialogue (G09)
+
+`Input` appends these fields after the equipment action at offset 76. All use the
+outer big-endian format and the same contiguous input sequence as movement.
+
+| Offset | Bytes | Field |
+| --- | --- | --- |
+| 77 | 1 | Dialogue action: 0 none, 1 open, 2 choose, 3 skip, 4 previous, 5 next |
+| 78 | 8 | World namespace |
+| 86 | 8 | Open: NPC object ID; choose: function symbol index + 1; otherwise zero |
+| 94 | 8 | Conversation ID (zero for open) |
+| 102 | 8 | Menu/subtitle revision (zero for open) |
+
+Action zero requires all dialogue fields zero. Other actions require a world;
+open requires a nonzero target and zero conversation/revision; subsequent actions
+require nonzero conversation/revision. Choose accepts a function index through
+UINT32_MAX, encoded plus one. Dialogue cannot share a frame with movement, look,
+pickup or equipment/consumption. Invalid encodings close the stream; valid but
+unauthorized requests are processed without effects. An acknowledgement is not
+proof that a conversation opened or an action succeeded.
+
+The host recomputes companion focus, including range, angle and line of sight,
+and resolves the typed NPC identity. Only one conversation may exist. The first
+eligible interaction owns its controls until exit, disconnect or world load;
+the other player's selection/skip keys and both players' movement are suppressed.
+A new open increments the conversation ID; menu/subtitle transitions increment
+its revision. A choice must match both and a currently offered function. Sequence
+validation rejects replayed packets; the lease also rejects fresh packets carrying
+an obsolete menu or conversation. No client supplies a reward or script actor.
+
+The companion stages the camera and NPC facing. The canonical host stays in place
+and remains HERO/OTHER for original conditions, known-info pairs, globals, journal,
+guild checks, inventory and rewards. The guest NPC output pipe is opened without
+running the perception-driven walk-to-host start routine. No script files change.
+The guest resolves focus from replicated NPCs without ticking their AI or VM.
+XP uses the existing shared reward path. Other tested item effects use the host.
+Ownership is transient; a load invalidates the peer generation and closes it.
+Disconnect clears guest dialogue output queues/barriers before releasing the lock.
+A pending save still waits for the conversation's safe boundary.
+
+This first stage explicitly allows Bosper's bow quest, its Bartok conversations,
+Lares's previously audited greeting/ornament callbacks and Garond's exit. Other
+NPCs cannot be opened by the guest. Within these menus, unreviewed actions and
+trade are denied before `GameScript::exec`, including before known-info recording;
+the guest sees `[Host only]` on those choices. Unreviewed automatic important infos
+are skipped. Training, recruitment, general campaign route coverage and personal
+story state are not enabled. Expand this policy only after tracing the complete
+callback/helper/world effects in G09a, including deferred chapter flags.
+
+The real `DIA_GAROND_SUCCESS_INFO` is a denied deferred chapter turn-in. The test
+arranges chapter 2, three mine reports and a running Evidence quest offline. A
+guest selection changes no story state or rewards. A host selection grants the
+paladin letter to the host, 500 XP to each, completes the quest and sets
+`MIS_READYFORCHAPTER3`; KAPITEL remains 2 until the later world-entry route. This
+is not a test of a chapter-3 map transition. Disk restart/rejoin preserves the
+completed action and does not offer it again. Guest voice/popup replication and
+scripted walk/cutscene staging beyond these audited paths remain limitations.

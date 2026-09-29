@@ -171,6 +171,10 @@ void MainWindow::setupUi() {
   rootMenu.setMainMenu();
 
   Gothic::inst().onDialogPipe  .bind(&dialogs,&DialogMenu::openPipe);
+  dialogs.sendInput=[this](const Coop::Input& input) {
+    if(network.status().role==Coop::Role::Guest && network.status().snapshotState=="ready" &&
+       !Gothic::inst().isCoopFailed() && !network.sendInput(input)) network.invalidate("input_queue_full");
+    };
   Gothic::inst().isNpcInDialogFn = std::bind(&DialogMenu::isNpcInDialog, &dialogs, std::placeholders::_1);
 
   Gothic::inst().onPrintScreen .bind(&dialogs,&DialogMenu::printScreen);
