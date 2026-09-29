@@ -969,6 +969,7 @@ std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zen
       if(info.condition) {
         auto* conditionSymbol = vm.find_symbol_by_index(uint32_t(info.condition));
         if (conditionSymbol != nullptr) {
+          observeDialogueCall(uint32_t(info.condition),false);
           valid = runFunction<int>(conditionSymbol) != 0;
           }
         }
@@ -1036,7 +1037,16 @@ void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
         ++i;
       }
     }
+  observeDialogueCall(dlg.scriptFn,true);
   runFunction(vm.find_symbol_by_index(dlg.scriptFn));
+  }
+
+void GameScript::observeDialogueCall(uint32_t function, bool action) {
+  if(!dialogueObservation) return;
+  if(observedDialogueCalls.size()==256) observedDialogueCalls.erase(observedDialogueCalls.begin());
+  observedDialogueCalls.push_back({action,function,
+    world().objectId(findNpc(vm.global_hero())),world().objectId(findNpc(vm.global_self())),
+    world().objectId(findNpc(vm.global_other()))});
   }
 
 void GameScript::printCannotUseError(Npc& npc, int32_t atr, int32_t nValue) {

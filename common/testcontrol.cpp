@@ -191,10 +191,77 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
     out.EndObject();
     }
   if(npc) {
+    auto& script=world->script();
+    if(!testWatchedGlobals.empty()) {
+      const auto view=dialogs.observation();
+      const auto symbolName=[&](size_t index) {
+        const auto symbol=script.findSymbol(index);
+        str(symbol ? symbol->name() : "");
+        };
+      out.Key("dialogue"); out.StartObject();
+      out.Key("choices_active"); out.Bool(view.choicesActive);
+      out.Key("selection"); out.Uint64(view.selection);
+      out.Key("player"); out.Uint64(world->objectId(view.player));
+      out.Key("npc"); out.Uint64(world->objectId(view.npc));
+      out.Key("text"); str(view.text);
+      out.Key("choices"); out.StartArray();
+      for(const auto& choice:view.choices) {
+        out.StartObject();
+        out.Key("title"); str(choice.title);
+        out.Key("function"); symbolName(choice.scriptFn);
+        out.Key("info"); if(choice.handle) symbolName(choice.handle->symbol_index()); else str("");
+        out.EndObject();
+        }
+      out.EndArray();
+      out.Key("calls"); out.StartArray();
+      for(const auto& call:script.dialogueCalls()) {
+        out.StartObject();
+        out.Key("action"); out.Bool(call.action);
+        out.Key("function"); symbolName(call.function);
+        out.Key("hero"); out.Uint64(call.hero);
+        out.Key("self"); out.Uint64(call.self);
+        out.Key("other"); out.Uint64(call.other);
+        out.EndObject();
+        }
+      out.EndArray();
+      out.Key("known"); out.StartArray();
+      for(const auto& [actor,info]:script.knownDialogues()) {
+        out.StartArray(); symbolName(actor); symbolName(info); out.EndArray();
+        }
+      out.EndArray();
+      out.Key("globals"); out.StartObject();
+      for(const auto& name:testWatchedGlobals) {
+        out.Key(name.c_str());
+        const auto symbol=script.findSymbol(name);
+        if(!symbol || symbol->type()!=zenkit::DaedalusDataType::INT || symbol->is_member()) { out.Null(); continue; }
+        out.StartArray();
+        for(uint16_t i=0;i<symbol->count();++i) out.Int(symbol->get_int(i));
+        out.EndArray();
+        }
+      out.EndObject();
+      out.Key("quests"); out.StartArray();
+      const auto& log=script.questLog();
+      for(size_t i=0;i<log.questCount();++i) {
+        const auto& quest=log.quest(i);
+        out.StartObject();
+        out.Key("name"); str(quest.name);
+        out.Key("status"); out.Uint(uint8_t(quest.status));
+        out.Key("section"); out.Uint(uint8_t(quest.section));
+        out.Key("entries"); out.StartArray();
+        for(const auto& entry:quest.entry) str(entry);
+        out.EndArray(); out.EndObject();
+        }
+      out.EndArray(); out.EndObject();
+      }
     auto vec = [&](const Vec3& v) {
       out.StartArray(); out.Double(v.x); out.Double(v.y); out.Double(v.z); out.EndArray();
       };
     auto combatInfo = [&](const Npc& actor) {
+      if(!testWatchedGlobals.empty()) {
+        out.Key("in_air"); out.Bool(actor.isInAir());
+        out.Key("ai_busy"); out.Bool(actor.isAiBusy());
+        out.Key("assess_talk"); out.Bool(actor.hasPerc(PERC_ASSESSTALK));
+        }
       out.Key("dead"); out.Bool(actor.isDead());
       out.Key("unconscious"); out.Bool(actor.isUnconscious());
       out.Key("weapon_state"); out.Int(int(actor.weaponState()));
@@ -300,6 +367,18 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       out.Key("talent_values"); out.StartArray();
       for(int i=0;i<TALENT_MAX_G2;++i) out.Int(actor->talentValue(Talent(i)));
       out.EndArray();
+      if(!testWatchedGlobals.empty()) {
+        out.Key("hit_chances"); out.StartArray();
+        for(const auto value:actor->handle().hitchance) out.Int(value);
+        out.EndArray();
+        out.Key("fight_learning_counters"); out.StartArray();
+        for(const auto name:{"REAL_TALENT_1H","REAL_TALENT_2H","REAL_TALENT_BOW","REAL_TALENT_CROSSBOW"}) {
+          const auto symbol=script.findSymbol(name);
+          const int index=symbol ? symbol->get_int() : -1;
+          if(index>=0 && index<100) out.Int(actor->handle().aivar[index]); else out.Null();
+          }
+        out.EndArray();
+        }
       out.Key("camera_bone"); vec(actor->cameraBone(game.camera()->isFirstPerson()));
       out.Key("head_bone"); vec(actor->cameraBone(true));
       Vec3 eye(0,0,20);
@@ -354,6 +433,12 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
         }
       out.EndArray();
       combatInfo(*other);
+      if(!testWatchedGlobals.empty()) {
+        out.Key("items"); out.StartArray();
+        for(auto it=other->inventory().iterator(Inventory::T_Inventory); it.isValid(); ++it)
+          itemInfo(*it,it.count(),it.isEquipped(),it.slot());
+        out.EndArray();
+        }
       out.EndObject();
       }
     out.EndArray();
@@ -369,6 +454,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
     out.EndArray();
     const auto focus = player.focus();
     out.Key("focus"); out.StartObject();
+    out.Key("object_id"); out.Uint64(focus.npc ? world->objectId(focus.npc) : focus.item ? world->objectId(focus.item) : 0);
     out.Key("type"); str(focus.item ? "item" : focus.npc ? "npc" : focus.interactive ? "interactive" : "none");
     out.Key("name"); str(focus.displayName());
     if(focus.item) {
@@ -585,6 +671,43 @@ void MainWindow::pollTestControl() {
       world->script().runFunction("INITPERCEPTIONS");
       game.gameSession()->tick(16);
       }
+    else if(action=="watch_dialogue") {
+      if(!cmd.HasMember("globals") || !cmd["globals"].IsArray() || cmd["globals"].Size()>64)
+        throw std::runtime_error("Expected up to 64 integer globals to observe");
+      std::vector<std::string> names;
+      auto& script=game.world()->script();
+      for(const auto& name:cmd["globals"].GetArray()) {
+        if(!name.IsString()) throw std::runtime_error("Expected a global name");
+        const auto symbol=script.findSymbol(name.GetString());
+        if(!symbol || symbol->is_member() || symbol->type()!=zenkit::DaedalusDataType::INT)
+          throw std::runtime_error("Expected an integer script global");
+        names.emplace_back(symbol->name());
+        }
+      testWatchedGlobals=std::move(names);
+      script.observeDialogues(!testWatchedGlobals.empty());
+      }
+    else if(action=="fixture_dialogue_npc") {
+      auto world=game.world();
+      if(!world->isAuthoritative() || runtimeMode!=R_Suspended || dialogs.isActive() ||
+         network.status().role!=Coop::Role::Disabled)
+        throw std::runtime_error("Dialogue NPC fixture requires held offline gameplay");
+      if(!cmd.HasMember("symbol") || !cmd["symbol"].IsString()) throw std::runtime_error("Expected NPC instance");
+      const std::string_view name=cmd["symbol"].GetString();
+      if(name!="VLK_413_BOSPER" && name!="VLK_440_BARTOK") throw std::runtime_error("Unsupported dialogue fixture NPC");
+      const auto instance=world->script().findSymbolIndex(name);
+      if(instance==size_t(-1)) throw std::runtime_error("Missing original NPC definition");
+      for(uint32_t i=0;i<world->npcCount();++i)
+        if(auto n=world->npcById(i); n && n->instanceSymbol()==instance)
+          throw std::runtime_error("Dialogue fixture NPC already exists");
+      auto actor=world->playerById(testInputPlayer);
+      auto pos=actor->position()+Vec3(150.f*std::cos(actor->rotationRad()),0,150.f*std::sin(actor->rotationRad()));
+      const auto ground=world->physic()->landRay(pos+Vec3(0,200,0),400);
+      if(!ground.hasCol) throw std::runtime_error("No ground for dialogue NPC");
+      pos.y=ground.v.y;
+      auto target=world->addNpc(instance,pos);
+      if(!target) throw std::runtime_error("Cannot create dialogue NPC");
+      target->setDirection(actor->position()-pos);
+      }
     else if(action=="fixture_quest") {
       auto& script = game.world()->script();
       script.log_createtopic("N07 isolation",0);
@@ -604,7 +727,10 @@ void MainWindow::pollTestControl() {
       game.world()->addPlayer(2);
       controlForPlayer(2);
       }
-    else if(action=="fixture_plant") {
+    else if(action=="fixture_plant" || action=="fixture_quest_bow") {
+      if(action=="fixture_quest_bow" && (!game.world()->isAuthoritative() || runtimeMode!=R_Suspended ||
+         network.status().role!=Coop::Role::Disabled || dialogs.isActive()))
+        throw std::runtime_error("Quest item fixture requires held offline gameplay");
       // Setup only: create a world item. Pickup must still use normal input.
       auto npc = game.world()->playerById(testInputPlayer);
       auto pos = npc->position();
@@ -614,7 +740,7 @@ void MainWindow::pollTestControl() {
       if(!ground.hasCol)
         throw std::runtime_error("No ground for plant fixture");
       pos.y = ground.v.y+5.f;
-      const auto cls = game.world()->script().findSymbolIndex("ITPL_HEALTH_HERB_01");
+      const auto cls = game.world()->script().findSymbolIndex(action=="fixture_plant" ? "ITPL_HEALTH_HERB_01" : "ITRW_BOW_L_03_MIS");
       if(cls==size_t(-1) || !game.world()->addItem(cls,pos))
         throw std::runtime_error("Cannot create plant fixture");
       }

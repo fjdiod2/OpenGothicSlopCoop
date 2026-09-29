@@ -34,6 +34,19 @@ class DialogMenu : public Tempest::Widget {
     bool isActive() const;
     bool hasContent() const;
 
+    // Observe the existing menu without evaluating conditions or executing scripts.
+    struct Observation {
+      bool choicesActive;
+      size_t selection;
+      const Npc* player;
+      const Npc* npc;
+      std::string_view text;
+      const std::vector<GameScript::DlgChoice>& choices;
+      };
+    Observation observation() const {
+      return {isChoiceMenuActive(),dlgSel,pl,other,current.time>0 ? current.txt : std::string_view(),choice};
+      }
+
     void print      (std::string_view msg);
     void printScreen(std::string_view msg, int x, int y, int time, const GthFont &font);
     void drawMsg    (Tempest::Painter& p, int offsetY);

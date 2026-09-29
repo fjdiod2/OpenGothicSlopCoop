@@ -141,6 +141,15 @@ class GameScript final {
     auto updateDialog (const GameScript::DlgChoice &dlg, Npc &player, Npc &npc) -> std::vector<GameScript::DlgChoice>;
     void exec(const DlgChoice &dlg, Npc &player, Npc &npc);
 
+    struct DialogueCall {
+      bool action;
+      uint32_t function;
+      uint64_t hero, self, other;
+      };
+    void observeDialogues(bool enabled) { dialogueObservation=enabled; }
+    const auto& dialogueCalls() const { return observedDialogueCalls; }
+    const auto& knownDialogues() const { return dlgKnownInfos; }
+
     void  printCannotUseError         (Npc &npc, int32_t atr, int32_t nValue);
     void  printCannotCastError        (Npc &npc, int32_t plM, int32_t itM);
     void  printCannotBuyError         (Npc &npc);
@@ -470,6 +479,7 @@ class GameScript final {
 
     void sort(std::vector<DlgChoice>& dlg);
     void setNpcInfoKnown(const zenkit::INpc& npc, const zenkit::IInfo& info);
+    void observeDialogueCall(uint32_t function, bool action);
     bool doesNpcKnowInfo(const zenkit::INpc& npc, size_t infoInstance) const;
 
     void saveSym(Serialize& fout, zenkit::DaedalusSymbol& s);
@@ -490,6 +500,8 @@ class GameScript final {
     uint64_t                                                    svmBarrier=0;
 
     std::set<std::pair<size_t,size_t>>                          dlgKnownInfos;
+    bool                                                       dialogueObservation = false;
+    std::vector<DialogueCall>                                   observedDialogueCalls;
     std::vector<std::shared_ptr<zenkit::IInfo>>                 dialogsInfo;
     zenkit::CutsceneLibrary                                     dialogs;
     std::unordered_map<size_t,AiState>                          aiStates;

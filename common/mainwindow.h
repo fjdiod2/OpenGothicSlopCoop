@@ -150,6 +150,7 @@ class MainWindow : public Tempest::Window {
                           std::string_view artifact = {});
     std::string testControlDir;
     std::string testSessionId;
+    std::vector<std::string> testWatchedGlobals;
     std::string saveStatus = "none";
     struct SaveRequest { std::string slot, name; uint32_t delayMs = 0; };
     std::optional<SaveRequest> queuedSave;
