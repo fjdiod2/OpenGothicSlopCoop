@@ -108,6 +108,8 @@ class MainWindow : public Tempest::Window {
     void tickNetwork();
     bool canRejoinNetwork() const;
     void rejoinNetwork();
+    void invalidateNetworkWorld();
+    bool worldReplacementPrepared = false;
     Coop::Session network;
     Coop::Hello networkIdentity;
     std::atomic_bool cancelFingerprint = false;

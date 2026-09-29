@@ -1100,9 +1100,12 @@ Camera::Mode MainWindow::solveCameraMode() const {
   }
 
 void MainWindow::startGame(std::string_view slot) {
-  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
+  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused() || queuedSave ||
+     Gothic::inst().checkLoading()!=Gothic::LoadState::Idle) return;
   // gothic.emitGlobalSound(gothic.loadSoundFx("NEWGAME"));
   loadStatus = "pending";
+
+  invalidateNetworkWorld();
 
   if(Gothic::inst().checkLoading()==Gothic::LoadState::Idle){
     setGameImpl(nullptr);
@@ -1119,7 +1122,10 @@ void MainWindow::startGame(std::string_view slot) {
   }
 
 void MainWindow::loadGame(std::string_view slot) {
+  if(Gothic::inst().checkLoading()!=Gothic::LoadState::Idle) return;
+  if(queuedSave) { loadStatus = "denied_busy"; return; }
   loadStatus = "pending";
+  invalidateNetworkWorld();
   if(Gothic::inst().checkLoading()==Gothic::LoadState::Idle) {
     setGameImpl(nullptr);
     }
@@ -1273,10 +1279,9 @@ void MainWindow::onVideo(std::string_view fname) {
 void MainWindow::onStartLoading() {
   returningFromSave = Gothic::inst().checkLoading()==Gothic::LoadState::Saving;
   if(returningFromSave) return; // Same world returns; retain its held controllers.
-  if(queuedSave) { queuedSave.reset(); saveStatus = "failed"; }
-  if(Gothic::inst().checkLoading()==Gothic::LoadState::Loading && !networkLoading)
-    network.invalidate("world_replaced");
+  if(!networkLoading && !worldReplacementPrepared) invalidateNetworkWorld();
   player   .clearInput();
+  player   .clearFocus();
   for(auto& entry:otherPlayers) {
     entry.second->clearInput();
     entry.second->clearFocus();
@@ -1290,6 +1295,7 @@ void MainWindow::onWorldLoaded() {
     returningFromSave = false;
     return; // Saving did not replace camera, world pointers or controller state.
     }
+  worldReplacementPrepared = false;
   dMouse = Point();
   rebuildPlayerControls();
 

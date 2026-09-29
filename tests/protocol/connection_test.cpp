@@ -466,6 +466,42 @@ void saveInputHold() {
   REQUIRE(!host.takeInput() && host.status().inputApplied==0 && host.status().generation==0);
   }
 
+void loadGeneration() {
+  Session host, guest;
+  host.start({Role::Host,0},identity(),0);
+  guest.start({Role::Guest,host.status().port},identity(),0);
+  pump(host,guest,[&] { return host.status().state=="connected"; });
+  const auto old = host.status().generation;
+  REQUIRE(host.bindCompanion(old) && host.sendSnapshot(old,1,Bytes{1}));
+  pump(host,guest,[&] { return guest.status().snapshotState=="received"; });
+  REQUIRE(guest.takeSnapshot() && guest.snapshotLoaded(old,1));
+  pump(host,guest,[&] { return host.status().snapshotState=="ready"; });
+  REQUIRE(guest.sendInput({Forward,100,0}));
+  pump(host,guest,[&] { return host.status().inputReceived==1; });
+  host.holdInput(true); // Deliberately leave accepted work undrained at load.
+  host.invalidate("world_replaced");
+  REQUIRE(host.status().generation==0 && host.status().boundPlayer==0 && !host.status().inputHeld);
+  REQUIRE(!host.takeInput() && !host.inputApplied(old,1,2));
+  pump(host,guest,[&] { return guest.status().state=="disconnected"; });
+  REQUIRE(!guest.takeSnapshot() && !guest.takePoses() && !guest.sendInput({Forward,0,0}));
+  guest.start({Role::Guest,host.status().port},identity(),2);
+  pump(host,guest,[&] { return host.status().state=="connected"; },3);
+  const auto fresh = host.status().generation;
+  REQUIRE(fresh!=old && host.bindCompanion(fresh) && host.sendSnapshot(fresh,1,Bytes{42}));
+  pump(host,guest,[&] { return guest.status().snapshotState=="received"; },4);
+  const auto snapshot = guest.takeSnapshot();
+  REQUIRE(snapshot && snapshot->generation==fresh && snapshot->data==Bytes{42});
+  REQUIRE(!guest.snapshotLoaded(old,1) && !host.inputApplied(old,1,2));
+  REQUIRE(guest.snapshotLoaded(fresh,1));
+  pump(host,guest,[&] { return host.status().snapshotState=="ready"; },5);
+  REQUIRE(guest.sendInput({0,0,0}));
+  pump(host,guest,[&] { return host.status().inputReceived==1; },6);
+  const auto input = host.takeInput();
+  REQUIRE(input && input->generation==fresh && input->sequence==1 && std::get<Input>(input->payload).buttons==0);
+  REQUIRE(host.inputApplied(fresh,1,2));
+  pump(host,guest,[&] { return guest.status().inputAcknowledged==1; },7);
+  }
+
 void inputValidation() {
   Session host, idle;
   host.start({Role::Host,0},identity(),0);
@@ -789,6 +825,7 @@ int main(int argc, char** argv) {
     else if(name=="input-validation") inputValidation();
     else if(name=="input-disconnect") inputDisconnect();
     else if(name=="save-input-hold") saveInputHold();
+    else if(name=="load-generation") loadGeneration();
     else if(name=="poses-roundtrip") posesRoundtrip();
     else if(name=="poses-validation") posesValidation();
     else if(name=="rejoin-queues") rejoinQueues();

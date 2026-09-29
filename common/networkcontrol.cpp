@@ -63,6 +63,29 @@ void MainWindow::rejoinNetwork() {
   network.start(CommandLine::inst().coopEndpoint(),networkIdentity,Tempest::Application::tickCount());
   }
 
+void MainWindow::invalidateNetworkWorld() {
+  // Fence the old lifetime before any owning world pointer is discarded.
+  network.invalidate("world_replaced");
+  network.holdInput(false);
+  clearInput();
+  player.clearFocus();
+  for(auto& entry:otherPlayers) entry.second->clearFocus();
+  inventory.onWorldChanged();
+  dialogs.onWorldChanged();
+  uiKeyUp = nullptr;
+  dMouse = Tempest::Point();
+  remoteButtons = 0;
+  networkInstalledInput = networkControlGeneration = 0;
+  networkInterpolation.reset();
+  networkLoadGeneration = networkLoadRevision = networkSnapshotTick = 0;
+  networkSnapshotArtifact.clear();
+  saveBoundary.reset();
+  saveStatus = queuedSave ? "failed" : "none";
+  queuedSave.reset();
+  testSaveDelayMs = 0;
+  worldReplacementPrepared = true;
+  }
+
 void MainWindow::tickNetwork() {
   if(fingerprintJob.valid() && fingerprintJob.wait_for(std::chrono::seconds(0))==std::future_status::ready) {
     try {

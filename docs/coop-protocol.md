@@ -232,7 +232,7 @@ unsupported action or full queue closes the peer. The game thread drains inputs
 only with the host world available and snapshot ready, applies control changes,
 then queues acknowledgements. Disconnect/world replacement clears queued input;
 controller-held buttons and mouse impulses are released on generation loss.
-The full disconnect/save acceptance scenario remains N11–N13.
+Disconnect/save acceptance is covered by the N11–N13 scenarios.
 
 ### StateAck
 
@@ -433,7 +433,7 @@ old pose disconnects before either actor changes. The same guest process then
 uses ordinary R input to rejoin again and resume movement. Asset-free
 `rejoin-queues` / `rejoin-stale` cover undrained host input/guest poses, unsent
 bytes, a changed snapshot and obsolete acknowledgements across connection reuse.
-Coordinated loading remains N14. Wire/checkpoint versions stay 4/56.
+Coordinated loading is described below (N14). Wire/checkpoint versions stay 4/56.
 
 ### Checkpoint input boundary (N13)
 
@@ -484,6 +484,37 @@ expose `save_boundary`, `loaded_checkpoint` and `network.input_held`.
 look input and a duplicate during I/O. It independently decodes the archive cut,
 checks exactly one calibrated turn after success/failure, verifies unchanged prior
 bytes on failure, resumes held movement and reloads connected/offline checkpoints.
+
+### Loading starts a fresh lifetime (N14)
+
+A host load closes the existing peer and discards pending transport input, poses
+and acknowledgements **before** discarding the old world. It releases the input
+hold, clears both controllers' actions/focus, mouse deltas, guest interpolation,
+snapshot metadata and transient inventory/dialogue references. The listener stays
+available. Loads during an active save/load are ignored; a queued save blocks a
+load request (`denied_busy`). No load completion can report a save commit.
+
+The checkpoint restores the persistent player roster and typed object IDs. Its
+optional boundary record is historical provenance, never a socket binding or a
+sequence counter. Both actors start without held controls. Old transient
+conversation/trade UI ownership is not restored. Invalid checkpoint metadata
+fails loading before gameplay; there is no fallback to the old connected world.
+
+The old guest remains read-only after disconnection. Press R to rejoin; the host
+issues a new nonzero generation and transfers a fresh snapshot of the restored
+world. Input begins at 1 only after readiness. Rejoin may connect while loading,
+but the host cannot bind/capture until it owns a ready world. Old input is ignored
+without consuming a new sequence; old poses/acks/snapshot completion cannot apply
+or acknowledge the new lifetime. The prototype uses explicit R rejoin, rather
+than an automatic load/reconnect loop or an in-place transport reset message.
+Wire/checkpoint versions remain 4/56.
+
+`load-generation` saves distinguishable companion HP/inventory, then changes them
+and moves both players. It loads the earlier checkpoint with input held, checks
+immediate revocation and restored idle state before sending key-up, rejoins, and
+injects genuinely delayed old input/poses. After rejecting these, both controllers
+can move again. A second load closes an open host inventory and requires another
+fresh snapshot. The disk checkpoint must remain byte-identical throughout.
 
 ## Starting and observing a connection
 
@@ -638,7 +669,7 @@ checks an independent `Hello` vector, every split point and byte-at-a-time input
 combined frames, invalid headers/payloads, all truncated prefixes, bounded queues,
 blocked/partial writes, 10,000 ordered input messages under changing read/write
 boundaries and 10,000 deterministic mutated/truncated frames.
-On macOS, thirteen additional test cases exercise endpoint parsing, real loopback
+On macOS, eighteen additional test cases exercise endpoint parsing, real loopback
 acceptance and reconnect, both directions of fingerprint validation, version
 rejection, second-guest rejection, deadlines, pending-socket limits, and the
 actual file/manifest hash implementation using temporary files. Input tests cover
@@ -659,7 +690,7 @@ Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
 assets, start a GUI, or require initialized engine submodules. It runs 13 codec
 cases plus four object-registry and two interpolation cases everywhere, and
-seventeen connection/fingerprint cases on macOS (36 total); the latter use
+eighteen connection/fingerprint cases on macOS (37 total); the latter use
 loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh

@@ -616,6 +616,7 @@ void Session::invalidate(const std::string& reason) {
     if(peer->stage==Impl::Peer::Connected) ++self.state.disconnected;
   self.peers.clear();
   self.resetSnapshot();
+  self.state.inputHeld = false;
   self.state.peers = 0;
   self.state.generation = self.state.boundPlayer = self.state.bindingRevision = 0;
   self.state.state = self.listener ? "listening" : "disconnected";
