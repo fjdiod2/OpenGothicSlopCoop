@@ -74,6 +74,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   const auto window = TestWindow::state();
   out.Key("native_window"); out.StartObject();
   out.Key("background"); out.Bool(CommandLine::inst().isTestBackground());
+  out.Key("background_supported"); out.Bool(TestWindow::backgroundSupported());
   out.Key("active"); out.Bool(window.active);
   out.Key("key_window"); out.Bool(window.keyWindow);
   out.Key("activations"); out.Uint64(window.activations);

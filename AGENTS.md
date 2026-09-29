@@ -20,6 +20,9 @@
   30-FPS target and 50% render scale; stop their owned processes when finished.
 - Automated macOS runs use `-test-background` to preserve the user's app and
   keyboard focus. Foreground mode is for explicitly requested interactive tests.
+  For stock-Tempest compatibility checks, announce the brief foreground run.
+  Keep the tracked Tempest submodule upstream; optional local extensions must
+  not become mandatory build dependencies. Detect their APIs at compile time.
 - Run tests silently, including effects, dialogue, videos and music. The parent
   repository's runner and test launcher apply `tools/prepare-gothic-test.py` to
   each isolated runtime before launch. Enable audio only for a user-requested

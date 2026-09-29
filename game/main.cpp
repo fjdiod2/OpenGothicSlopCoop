@@ -129,10 +129,15 @@ int main(int argc,const char** argv) {
   Workers::setThreadName("Main thread");
 
   CommandLine          cmd{argc,argv};
+  if(!TestWindow::configureBackground(cmd.isTestBackground())) {
+    const char* error = "-test-background is unavailable with this Tempest build. "
+                        "Omit it (test runner: --foreground), or select a Tempest build with background support.";
+    Tempest::Log::e(error);
+    return 2; // Reject before initializing graphics, NSApplication or a window.
+    }
 #if defined(__OSX__)
   if(!cmd.testControlPath().empty()) {
     TestWindow::observe();
-    Tempest::SystemApi::setBackgroundMode(cmd.isTestBackground());
     }
 #endif
   auto                 api     = mkApi(cmd);

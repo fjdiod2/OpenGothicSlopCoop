@@ -13,4 +13,7 @@ struct State {
   };
 void observe();
 State state();
+bool backgroundSupported();
+// Returns false only when background mode was requested but is unavailable.
+bool configureBackground(bool enabled);
 }

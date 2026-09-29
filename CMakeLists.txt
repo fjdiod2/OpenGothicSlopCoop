@@ -124,8 +124,10 @@ if(WIN32)
 else()
   set(TEMPEST_BUILD_SHARED OFF CACHE INTERNAL "")
 endif()
-add_subdirectory(lib/Tempest/Engine)
-include_directories(lib/Tempest/Engine/include)
+set(OPENGOTHIC_TEMPEST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/Tempest" CACHE PATH
+    "Tempest source checkout (override only for optional local development features)")
+add_subdirectory("${OPENGOTHIC_TEMPEST_SOURCE_DIR}/Engine" "${CMAKE_CURRENT_BINARY_DIR}/lib/Tempest/Engine")
+include_directories("${OPENGOTHIC_TEMPEST_SOURCE_DIR}/Engine/include")
 target_link_libraries(${PROJECT_NAME} Tempest)
 
 # zip
