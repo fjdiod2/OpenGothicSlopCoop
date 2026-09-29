@@ -853,6 +853,9 @@ void MainWindow::pollTestControl() {
     else if(action=="fixture_consumables") {
       if(!game.world()->isAuthoritative() || network.status().bindings!=0)
         throw std::runtime_error("Consumable fixture requires an unconnected authoritative host");
+      if(cmd.HasMember("count") && (!cmd["count"].IsUint() || cmd["count"].GetUint()<1 || cmd["count"].GetUint()>3))
+        throw std::runtime_error("Consumable fixture count must be between 1 and 3");
+      const auto count = cmd.HasMember("count") ? cmd["count"].GetUint() : 3u;
       auto actor = game.world()->playerById(testInputPlayer);
       for(auto name : {"ITFO_BREAD", "ITFO_CHEESE", "ITFO_FISH", "ITFOMUTTON", "ITFO_APPLE",
                       "ITPO_HEALTH_01", "ITPO_HEALTH_02", "ITPO_HEALTH_03", "ITPO_HEALTH_ADDON_04",
@@ -860,7 +863,7 @@ void MainWindow::pollTestControl() {
                       "ITPO_PERM_STR", "ITPO_PERM_DEX", "ITPO_PERM_HEALTH", "ITPO_PERM_MANA"}) {
         const auto instance = game.world()->script().findSymbolIndex(name);
         if(instance==size_t(-1)) throw std::runtime_error("Missing original consumable instance");
-        actor->addItem(instance,3);
+        actor->addItem(instance,count);
         }
       }
     else if(action=="fixture_weapons") {
