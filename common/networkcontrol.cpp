@@ -256,6 +256,15 @@ void MainWindow::sendNetworkEquipment(size_t instance, bool equipped) {
     network.invalidate("input_queue_full");
   }
 
+void MainWindow::sendNetworkConsumable(size_t instance) {
+  auto& game=Gothic::inst();
+  if(network.status().role!=Coop::Role::Guest || network.status().snapshotState!="ready" ||
+     game.checkLoading()!=Gothic::LoadState::Idle || instance>UINT32_MAX ||
+     !game.localPlayer() || inventory.activePlayer()!=game.localPlayer()) return;
+  if(!network.sendInput({networkButtons,0,0,0,0,uint64_t(instance)+1,3}))
+    network.invalidate("input_queue_full");
+  }
+
 void MainWindow::tickNetworkInput(bool apply) {
   auto& game = Gothic::inst();
   const auto& status = network.status();
@@ -272,8 +281,10 @@ void MainWindow::tickNetworkInput(bool apply) {
     networkInstalledInput = 0;
     networkPickupRequests = networkPickupAccepted = 0;
     networkEquipmentRequests = networkEquipmentAccepted = 0;
+    networkConsumableRequests = networkConsumableAccepted = 0;
     networkEquipmentSent = {};
     networkProgressSent = {};
+    networkPersonalSent = {};
     networkCombatSent.clear();
     networkCombatCursor = 0;
     if(status.role==Coop::Role::Host && game.world())
@@ -312,7 +323,13 @@ void MainWindow::tickNetworkInput(bool apply) {
       ++networkPickupRequests;
       if(control.pickupObject(input.pickupWorld,input.pickupItem)) ++networkPickupAccepted;
       }
-    if(input.equipmentItem!=0) {
+    if(input.equipmentItem!=0 && input.equipmentAction==3) {
+      ++networkConsumableRequests;
+      if(!dialogs.isActive() && !video.isActive() && game.world()->currentCs()==nullptr &&
+         game.world()->playerById(PlayerIdentity::Companion)->requestConsumable(size_t(input.equipmentItem-1)))
+        ++networkConsumableAccepted;
+      }
+    else if(input.equipmentItem!=0) {
       ++networkEquipmentRequests;
       if(!dialogs.isActive() && !video.isActive() && game.world()->currentCs()==nullptr &&
          game.world()->playerById(PlayerIdentity::Companion)->requestWeaponEquipment(size_t(input.equipmentItem-1),input.equipmentAction==1))
@@ -333,6 +350,7 @@ void MainWindow::updateNetworkPoses() {
     if(status.role==Coop::Role::Host) {
       const std::array<Coop::WeaponEquipment,2> equipment = {world->playerById(1)->networkEquipment(),world->playerById(2)->networkEquipment()};
       const std::array<Coop::CombatState,2> progression = {world->playerById(1)->networkCombatState(),world->playerById(2)->networkCombatState()};
+      const std::array<Coop::PlayerState,2> personal = {world->playerById(1)->networkPlayerState(),world->playerById(2)->networkPlayerState()};
       std::vector<Coop::CombatNpc> npcs;
       // Fair bounded batches. Remember changes only when queued; do not lose a
       // death because many other NPCs changed in the same frame.
@@ -349,7 +367,7 @@ void MainWindow::updateNetworkPoses() {
         if(previous==networkCombatSent.end() || previous->second!=next) npcs.push_back(std::move(next));
         }
       if(status.posesSent!=0 && status.poseTick==world->tickCount() && status.inputApplied==networkInstalledInput &&
-         !world->hasNetworkPickups() && equipment==networkEquipmentSent && progression==networkProgressSent && npcs.empty()) return;
+         !world->hasNetworkPickups() && equipment==networkEquipmentSent && progression==networkProgressSent && personal==networkPersonalSent && npcs.empty()) return;
       const auto revision = std::max(status.snapshotRevision,status.posesSent)+1;
       if(revision==0) throw std::runtime_error("Pose revision exhausted");
       while(status.inputApplied<networkInstalledInput)
@@ -364,11 +382,13 @@ void MainWindow::updateNetworkPoses() {
       poses.pickups = world->takeNetworkPickups();
       poses.equipment = equipment;
       poses.progression = progression;
+      poses.personal = personal;
       poses.npcs = std::move(npcs);
       if(!network.sendPoses(status.generation,revision,poses))
         throw std::runtime_error("Cannot queue authoritative poses");
       networkEquipmentSent = equipment;
       networkProgressSent = progression;
+      networkPersonalSent = personal;
       for(const auto& npc:poses.npcs) networkCombatSent[npc.pose.object]=npc;
       return;
       }
@@ -399,9 +419,12 @@ void MainWindow::updateNetworkPoses() {
         if(!actor || actor->isPlayer() || !actor->validateNetworkPose(npc.pose) || !actor->validateNetworkCombatState(npc.state))
           throw std::runtime_error("Unknown combat NPC, reference or animation");
         }
-      if(!world->applyNetworkInventory(poses.pickups,poses.equipment))
+      if(!world->applyNetworkInventory(poses.pickups,poses.equipment,poses.personal))
         throw std::runtime_error("Inventory update does not match the snapshot state");
-      for(size_t i=0;i<actors.size();++i) actors[i]->applyNetworkCombatState(poses.progression[i]);
+      for(size_t i=0;i<actors.size();++i) {
+        actors[i]->applyNetworkCombatState(poses.progression[i]);
+        actors[i]->applyNetworkPlayerState(poses.personal[i]);
+        }
       for(const auto& npc:poses.npcs) {
         auto actor=world->npcByObjectId(poses.world,npc.pose.object);
         actor->applyNetworkCombatState(npc.state);

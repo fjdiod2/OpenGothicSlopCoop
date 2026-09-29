@@ -156,6 +156,7 @@ float MainWindow::uiScale() const {
 
 void MainWindow::setupUi() {
   inventory.onEquipmentRequest = [this](size_t instance, bool equipped) { sendNetworkEquipment(instance,equipped); };
+  inventory.onConsumableRequest = [this](size_t instance) { sendNetworkConsumable(instance); };
   setLayout(new StackLayout());
   addWidget(&document);
   addWidget(&dialogs);

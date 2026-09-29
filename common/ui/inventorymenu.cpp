@@ -465,6 +465,9 @@ void InventoryMenu::onItemAction(uint8_t slotHint) {
   if(Gothic::inst().isGuest()) {
     if(state==State::Equip && slotHint==Item::NSLOT && it->isEquipmentWeapon() && onEquipmentRequest)
       onEquipmentRequest(it->clsId(),!it.isEquipped());
+    else if(state==State::Equip && slotHint==Item::NSLOT && onConsumableRequest &&
+            player->world().script().isCoopConsumable(*it))
+      onConsumableRequest(it->clsId());
     return;
     }
 

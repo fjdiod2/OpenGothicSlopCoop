@@ -1182,6 +1182,28 @@ int GameScript::invokeState(Npc* npc, Npc* oth, Npc* vic, ScriptFn fn) {
   return ret;
   }
 
+bool GameScript::isCoopConsumable(const Item& item) {
+  // Audited original Gothic II actor-local callbacks. In particular apples and
+  // quest foods use global story/personal counters and are deliberately absent.
+  static constexpr std::pair<std::string_view,std::string_view> supported[] = {
+    {"ITFO_BREAD","USE_BREAD"}, {"ITFO_CHEESE","USE_CHEESE"},
+    {"ITFO_FISH","USE_FISH"}, {"ITFOMUTTON","USE_MEAT"},
+    {"ITPO_HEALTH_01","USEITPO_HEALTH_01"}, {"ITPO_HEALTH_02","USEITPO_HEALTH_02"},
+    {"ITPO_HEALTH_03","USEITPO_HEALTH_03"}, {"ITPO_HEALTH_ADDON_04","USEITPO_HEALTH_04"},
+    {"ITPO_MANA_01","USEITPO_MANA_01"}, {"ITPO_MANA_02","USEITPO_MANA_02"},
+    {"ITPO_MANA_03","USEITPO_MANA_03"}, {"ITPO_MANA_ADDON_04","USEITPO_MANA_04"},
+    {"ITPO_PERM_STR","USEITPO_PERM_STR"}, {"ITPO_PERM_DEX","USEITPO_PERM_DEX"},
+    {"ITPO_PERM_HEALTH","USEITPO_PERM_HEALTH"}, {"ITPO_PERM_MANA","USEITPO_PERM_MANA"}
+    };
+  if((item.mainFlag() & (ITM_CAT_FOOD|ITM_CAT_POTION))==0 || item.isEquipped() || item.isMission()) return false;
+  const auto symbol = findSymbol(item.clsId());
+  const auto callback = findSymbol(size_t(item.handle().on_state[0]));
+  if(!symbol || !callback || callback->is_external()) return false;
+  for(auto [name,function]:supported)
+    if(symbol->name()==name && callback->name()==function) return true;
+  return false;
+  }
+
 void GameScript::invokeItem(Npc *npc, ScriptFn fn) {
   if(fn==size_t(-1) || fn == 0)
     return;

@@ -98,6 +98,8 @@ class Inventory final {
     void   updateView      (Npc& owner);
     Coop::WeaponEquipment networkEquipment() const;
     void   applyNetworkEquipment(const Coop::WeaponEquipment& equipment, Npc& owner);
+    void   networkHeldItem(Coop::PlayerState& state, World& world) const;
+    void   applyNetworkHeldItem(const Coop::PlayerState& state, Npc& owner);
 
     const Item*  activeWeapon() const;
     Item*  activeWeapon();
@@ -177,4 +179,6 @@ class Inventory final {
     MdlSlot                            ammotSlot, stateSlot;
     int32_t                            curItem=0;
     int32_t                            stateItem=0;
+    uint64_t                           replicaHeldItem=0;
+    std::string                        replicaHeldSlot;
   };

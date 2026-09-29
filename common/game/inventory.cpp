@@ -282,9 +282,15 @@ void Inventory::delItem(Item *it, size_t count, Npc& owner) {
   if(it==nullptr)
     return;
 
+  const auto before = it->count();
   if(it->count()>count)
     it->setCount(it->count()-count); else
     it->setCount(0);
+
+  if(before!=it->count() && owner.world().isAuthoritative() && owner.world().playerId(&owner)!=0 &&
+     owner.world().script().isCoopConsumable(*it))
+    owner.world().recordNetworkPickup({owner.world().playerId(&owner),owner.world().objectId(&owner),0,
+                                      it->clsId(),before-it->count(),before,it->count()});
 
   if(it->count()>0)
     return;
@@ -857,6 +863,37 @@ void Inventory::applyArmor(Item &it, Npc &owner, int32_t sgn) {
     }
   }
 
+void Inventory::networkHeldItem(Coop::PlayerState& state, World& world) const {
+  if(!world.isAuthoritative()) {
+    state.heldItem=replicaHeldItem;
+    state.heldSlot=replicaHeldSlot;
+    return;
+    }
+  for(const auto& slot:mdlSlots)
+    if(slot.item && world.script().isCoopConsumable(*slot.item)) {
+      state.heldItem=slot.item->clsId()+1;
+      state.heldSlot=slot.slot;
+      return;
+      }
+  }
+
+void Inventory::applyNetworkHeldItem(const Coop::PlayerState& state, Npc& owner) {
+  if(replicaHeldItem==state.heldItem && replicaHeldSlot==state.heldSlot && mdlSlots.empty()) return;
+  // The guest does not execute item animation tags; only the host supplies the
+  // visible prop. Clear audited snapshot props without consuming them or touching
+  // unrelated slots (torches, ammunition or interactive-object state).
+  for(size_t i=0;i<mdlSlots.size();) {
+    if(mdlSlots[i].item && owner.world().script().isCoopConsumable(*mdlSlots[i].item)) {
+      const auto slot=mdlSlots[i].slot;
+      clearSlot(owner,slot,false);
+      } else ++i;
+    }
+  if(!replicaHeldSlot.empty()) owner.clearSlotItem(replicaHeldSlot);
+  replicaHeldItem=state.heldItem; replicaHeldSlot=state.heldSlot;
+  if(auto item=state.heldItem==0 ? nullptr : getItem(size_t(state.heldItem-1)))
+    owner.setSlotItem(owner.world().addView(item->handle()),state.heldSlot);
+  }
+
 bool Inventory::use(size_t cls, Npc &owner, uint8_t slotHint, bool force) {
   Item* it=findByClass(cls);
   if(it==nullptr)
@@ -1129,5 +1166,4 @@ Item *Inventory::readPtr(Serialize &fin) {
     return items[v].get();
   return nullptr;
   }
-
 

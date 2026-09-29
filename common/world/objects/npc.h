@@ -95,12 +95,15 @@ class Npc final {
     bool       validateNetworkPose(const Coop::ActorPose& pose) const;
     void       applyNetworkPose(const Coop::ActorPose& pose);
     Coop::CombatState networkCombatState() const;
+    Coop::PlayerState networkPlayerState() const;
+    void       applyNetworkPlayerState(const Coop::PlayerState& state);
     bool       validateNetworkCombatState(const Coop::CombatState& state) const;
     void       applyNetworkCombatState(const Coop::CombatState& state);
     Coop::WeaponEquipment networkEquipment() const { return invent.networkEquipment(); }
     void       applyNetworkEquipment(const Coop::WeaponEquipment& equipment) { invent.applyNetworkEquipment(equipment,*this); }
     std::array<bool,2> networkWeaponViews() const { return visual.weaponViews(); }
     bool       requestWeaponEquipment(size_t instance, bool equipped);
+    bool       requestConsumable(size_t instance);
 
     auto       transform()  const -> Tempest::Matrix4x4;
     auto       position()   const -> Tempest::Vec3;

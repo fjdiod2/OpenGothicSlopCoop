@@ -53,6 +53,7 @@ class InventoryMenu : public Tempest::Widget {
     bool     selectedItemEquipped();
     void  onWorldChanged();
     std::function<void(size_t,bool)> onEquipmentRequest;
+    std::function<void(size_t)> onConsumableRequest;
 
     void  tick(uint64_t dt);
     void  draw(Tempest::Encoder<Tempest::CommandBuffer>& cmd);

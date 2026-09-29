@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 7 (G06)
+# Co-op wire protocol, version 8 (G06b)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -15,6 +15,10 @@ N07 makes the guest a presentation-only process; N08 transfers a host checkpoint
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
 
+Version 8 adds audited consumable-use intent, ordered inventory removals and
+personal talent/counter/held-item state. Version-7 peers are rejected; checkpoints
+remain version 56 because original actor and inventory records already persist
+these effects and pending animations.
 Version 7 enables melee input bits and appends player progression and bounded
 NPC combat updates to `Poses`. Version-6 peers are rejected. Checkpoints remain
 version 56: individual actor records and the original reward guards already persist.
@@ -55,7 +59,7 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `6` |
+| 8 | 2 | Version | Exactly `8` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
@@ -83,7 +87,7 @@ animation-name/unused slots specified below.
 | 8 | `SnapshotChunk` | Host → guest | 53–32,820 | `nonzero / 2 / 0 / nonzero` |
 | 9 | `SnapshotEnd` | Host → guest | 44 | `nonzero / 2 / 0 / nonzero` |
 | 10 | `SnapshotReady` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
-| 11 | `Poses` | Host → guest | 1,694–28,030 | `nonzero / 2 / 0 / nonzero` |
+| 11 | `Poses` | Host → guest | 2,150–28,486 | `nonzero / 2 / 0 / nonzero` |
 | 12 | `PoseAck` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
 
 ### Hello
@@ -201,8 +205,8 @@ EOF and cancellation while the application owns a completed snapshot.
 | 50 | 2 | Signed relative look Y, in input pixels |
 | 52 | 8 | Pickup target world namespace, or zero |
 | 60 | 8 | Pickup target typed item ID, or zero |
-| 68 | 8 | Equipment inventory instance + 1, or zero |
-| 76 | 1 | Equipment desired state: 0 none, 1 equipped, 2 unequipped |
+| 68 | 8 | Inventory instance + 1, or zero |
+| 76 | 1 | Inventory action: 0 none, 1 equip, 2 unequip, 3 consume once |
 
 | Bit | Mask | Action |
 | --- | --- | --- |
@@ -286,7 +290,8 @@ All floats are finite IEEE-754 binary32, transmitted as big-endian bit patterns.
 This frame contains a 24-byte prefix, two 729-byte actor records in player order
 1, 2, two 16-byte weapon-equipment records, a u16 pickup count and zero to
 sixteen 56-byte pickup records, two 66-byte combat/progression records, a u16 NPC
-count and zero to 32 NPC combat records of 795 bytes each. No native structs, pointers or array indexes cross
+count and zero to 32 NPC combat records of 795 bytes each, followed by two
+228-byte personal records (host, companion). No native structs, pointers or array indexes cross
 the wire. The header's player 2 identifies the recipient binding, not an actor
 index within the payload.
 
@@ -304,6 +309,7 @@ index within the payload.
 | 1516 + pickup count × 56 | 132 | Host then companion combat/progression records |
 | 1648 + pickup count × 56 | 2 | NPC combat count, 0–32 |
 | 1650 + pickup count × 56 | NPC count × 795 | NPC updates |
+| 1650 + pickup count × 56 + NPC count × 795 | 456 | Host then companion personal records |
 
 Each actor record is:
 
@@ -330,14 +336,14 @@ NaN, infinity, invalid counts, padding or identities are rejected by the codec.
 After readiness, pose revisions start at 2 and increase by exactly one. Host
 capture occurs after its simulation and controller step, at most once per render
 frame, and is skipped when the tick and applied-input boundary are unchanged
-and no pickup, equipment, progression or NPC updates are pending.
+and no inventory, equipment, progression, personal or NPC updates are pending.
 Guest frames must match generation/binding, arrive in revision order, carry
 nondecreasing host ticks/applied-input sequences and never refer to unsent input.
 There is a separate 64-frame application queue; overflow closes the connection.
 The guest resolves both typed NPC IDs in the received world namespace and validates
 both animations, the complete pickup batch, both weapon-equipment records and
-all combat states, NPC identities, references and animations
-before applying anything. Invalid
+all combat/personal states, held-item references, NPC identities, references and
+animations before applying anything. Invalid
 world/object/animation/transfer state closes the connection without partially
 applying the frame.
 
@@ -402,6 +408,83 @@ concurrent attacks, duplicate/stale input, original level-up, an offline compani
 aggressive AI against either player, disk restarts and atomic malformed-frame
 rejection. Concrete run results are recorded in the parent `TESTING.md`.
 
+### Consumable use and personal effects (G06b)
+
+Input action **3** requests one use of the encoded inventory instance. It shares
+ordered, generation-bound input sequencing with movement, pickups and equipment;
+it contains no result, amount, effect or requested actor. A nonzero inventory
+intent cannot also request a world pickup. The host resolves the bound companion,
+requires an owned, nonempty, audited item and its original use conditions, and
+rejects downed, airborne, sliding, interacting, armed or cutscene-locked actors.
+Host dialogue/video also blocks the request. Acceptance invokes the original
+`Inventory::use` and unchanged Daedalus callback with `SELF` scoped to the consumer.
+`HERO` remains the host. Guest inventory actions never execute scripts.
+
+The supported original Gothic II items/callbacks are:
+
+| Instances | Callback(s) | Original personal effect |
+| --- | --- | --- |
+| `ITFO_BREAD`, `ITFO_CHEESE`, `ITFO_FISH`, `ITFOMUTTON` | `USE_BREAD`, `USE_CHEESE`, `USE_FISH`, `USE_MEAT` | +10/+15/+5/+12 HP, clamped |
+| `ITPO_HEALTH_01`, `_02`, `_03`, `ITPO_HEALTH_ADDON_04` | `USEITPO_HEALTH_01` through `_04` | +50/+70/+100 HP or full HP |
+| `ITPO_MANA_01`, `_02`, `_03`, `ITPO_MANA_ADDON_04` | `USEITPO_MANA_01` through `_04` | +50/+75/+100 mana or full mana |
+| `ITPO_PERM_STR`, `ITPO_PERM_DEX` | Matching `USEITPO_PERM_*` | +3 attribute and corresponding personal learning counter; dexterity >=90 can unlock acrobatics |
+| `ITPO_PERM_HEALTH`, `ITPO_PERM_MANA` | Matching `USEITPO_PERM_*` | +20 max/current HP or +5 max/current mana; mana learning counter +5 |
+
+Both instance and callback names must match; mission/equipped items are excluded.
+This list audits the installed original scripts, not arbitrary mods that replace
+callback bodies under the same names. Apples use the global `APPLE_BONUS`, so
+apples, quest items and other unaudited consumables remain blocked for the guest
+until the personal scripting audit. Host offline item-use behavior is unchanged.
+Original script prints/sounds still originate on the host; this slice replicates
+attributes, talents, counters, animation and hand props, not script UI messages.
+
+**Original timing is preserved.** The script applies its effect immediately;
+original item animation tags remove the unit later. These can be different pose
+revisions. G06b does not make them an atomic gameplay transaction, refund an
+interrupted effect, add a new removal timer, or fix original interruption exploits.
+A fresh Use press follows the original animation rules. Duplicate network sequences
+never call Use again. Disconnect releases controls but does not replay an accepted
+use. Save/reload restores the original pending item/animation state; the existing
+save boundary flushes accepted inventory state before its acknowledgement.
+
+Inventory transfers retain the existing 56-byte layout and shared ordering.
+**World item ID zero now denotes a removal from the named player's inventory**:
+`amount > 0`, `amount <= before`, `after = before - amount`. No world tombstone
+is created. Nonzero IDs retain pickup semantics below. Repeated zero IDs are
+allowed; only nonzero world IDs must be unique. The host records actual removal
+from the inventory path, including the original animation tag, without advancing
+its timing. The guest validates every pre-count against the projected result of
+preceding transfers, requires audited item types for removals and validates both
+actors' equipment and hand props before any mutation. It then adjusts existing
+items without executing constructors/use callbacks. Invalid later records reject
+the entire frame. The decoder releases variable transfer/NPC bytes when a frame
+is dequeued, so ongoing item traffic cannot exhaust a phantom queue budget.
+
+Each 228-byte personal record contains:
+
+| Offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 88 | 22 signed i32 talent skills, each 0–6 |
+| 88 | 88 | 22 signed i32 talent values, each 0–100 |
+| 176 | 12 | Nonnegative i32 `REAL_STRENGTH`, `REAL_DEXTERITY`, `REAL_MANA_MAX` counters |
+| 188 | 8 | Held consumable instance + 1, or zero |
+| 196 | 32 | Printable ASCII bone name, zero padded |
+
+A zero held instance requires an empty slot; a nonzero instance must resolve to
+an audited item remaining in the projected inventory and slot `ZS_RIGHTHAND` or
+`ZS_LEFTHAND`. Nonzero bytes after NUL padding are rejected. Counter names resolve
+to validated `C_NPC.aivar` indexes in the compatible scripts (81/82/83 in the
+installed game). Direct talent installation updates engine overlays without
+executing scripts. Guest hand props come from these records; guest animation tags
+remain disabled. Pending snapshot props are reconciled without deleting items.
+All personal fields are absolute state; pose revisions prevent repeated effects.
+
+`protocol-consumables` covers action encoding, mixed pickup/removal order, count
+bounds, personal fields, padding, fragmented frames and repeated queue draining.
+Parent scenarios `consumable-baseline`, `consumables` and `consumable-save` exercise
+the original item scripts and real host/guest inventory controls. See the parent
+`TESTING.md` for commands, offline comparisons, restarts and evidence.
+
 ### Pickup transfers (G01)
 
 Each transfer contains seven u64 fields in order:
@@ -410,14 +493,14 @@ Each transfer contains seven u64 fields in order:
 | --- | --- |
 | 0 | Recipient player role, 1 or 2 |
 | 8 | Recipient typed NPC object ID, matching that frame's actor |
-| 16 | Removed typed world-item ID |
+| 16 | Removed typed world-item ID; zero selects G06b inventory removal |
 | 24 | Item instance/class index in the fingerprint-matched game scripts |
 | 32 | Transferred stack count, positive |
 | 40 | Recipient's previous count of that instance |
 | 48 | Recipient's resulting count, previous + transferred |
 
 Instance and inventory counts must fit u32 without overflow. The record's world
-is the enclosing pose namespace. Duplicate item IDs within a batch are invalid.
+is the enclosing pose namespace. Duplicate nonzero item IDs within a batch are invalid.
 Before mutating anything the guest validates all live typed references, item
 class/count/unequipped state and inventory preconditions; sequential transfers
 of the same class use the preceding transfer's resulting count. A valid batch
@@ -582,7 +665,7 @@ Reasons: `1` protocol version, `2` engine fingerprint, `3` game-data fingerprint
 `4` host full, `5` invalid session/handshake. Any other value is malformed. No
 arbitrary error string crosses the wire. A reject is a terminal handshake reply,
 followed by closing the connection. On an undecodable/unsupported peer version,
-closing without a reply is also valid; a peer might not understand a version-7
+closing without a reply is also valid; a peer might not understand a version-8
 reject. Runtime connection failure and stale input are handled by the session
 layer, not by sending an unbound reject in the middle of gameplay.
 
@@ -944,7 +1027,7 @@ This 77-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 0000004d 0007 0003
+4f474350 0000004d 0008 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064

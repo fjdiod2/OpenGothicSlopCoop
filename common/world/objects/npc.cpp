@@ -409,6 +409,34 @@ bool Npc::validateNetworkPose(const Coop::ActorPose& pose) const {
          visual.validateNetworkLayers(pose.layers);
   }
 
+Coop::PlayerState Npc::networkPlayerState() const {
+  static_assert(Coop::TalentCount==TALENT_MAX_G2);
+  Coop::PlayerState state;
+  std::copy_n(talentsSk,Coop::TalentCount,state.skills.begin());
+  std::copy_n(talentsVl,Coop::TalentCount,state.values.begin());
+  size_t n=0;
+  for(auto name:{"REAL_STRENGTH","REAL_DEXTERITY","REAL_MANA_MAX"}) {
+    auto symbol=owner.script().findSymbol(name);
+    const int index=symbol ? symbol->get_int() : -1;
+    if(index<0 || index>=100) throw std::runtime_error("Missing audited personal counter");
+    state.counters[n++]=hnpc->aivar[index];
+    }
+  invent.networkHeldItem(state,owner);
+  return state;
+  }
+
+void Npc::applyNetworkPlayerState(const Coop::PlayerState& state) {
+  if(owner.isAuthoritative()) return;
+  for(size_t i=0;i<Coop::TalentCount;++i) {
+    if(talentsSk[i]!=state.skills[i]) setTalentSkill(Talent(i),state.skills[i]);
+    talentsVl[i]=state.values[i];
+    }
+  size_t n=0;
+  for(auto name:{"REAL_STRENGTH","REAL_DEXTERITY","REAL_MANA_MAX"})
+    hnpc->aivar[owner.script().findSymbol(name)->get_int()]=state.counters[n++];
+  invent.applyNetworkHeldItem(state,*this);
+  }
+
 Coop::CombatState Npc::networkCombatState() const {
   Coop::CombatState state;
   std::copy_n(hnpc->attribute,state.attributes.size(),state.attributes.begin());
@@ -3712,6 +3740,17 @@ void Npc::setCurrentItem(size_t item) {
 void Npc::unequipItem(size_t item) {
   if(!owner.isAuthoritative()) return;
   invent.unequip(item,*this);
+  }
+
+bool Npc::requestConsumable(size_t instance) {
+  if(!owner.isAuthoritative() || owner.isCutsceneLock() || isDown() || isInAir() || isSlide() ||
+     interactive()!=nullptr || weaponState()!=WeaponState::NoWeapon) return false;
+  auto item=getItem(instance);
+  int32_t attribute=0, value=0;
+  if(!item || item->count()==0 || !owner.script().isCoopConsumable(*item) || !item->checkCondUse(*this,attribute,value)) return false;
+  // Preserve original effect/removal and interruption timing. Ordered transport
+  // input rejects retries; animation tags perform the original later removal.
+  return invent.use(instance,*this,Item::NSLOT,false);
   }
 
 bool Npc::requestWeaponEquipment(size_t instance, bool equipped) {

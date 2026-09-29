@@ -50,7 +50,7 @@ size_t bodySize(MessageType type) {
     case MessageType::SnapshotEnd:
     case MessageType::SnapshotReady:
     case MessageType::PoseAck: return 0;
-    case MessageType::Poses: return 58+2*ActorPoseBytes+2*CombatStateBytes+2;
+    case MessageType::Poses: return 58+2*ActorPoseBytes+2*CombatStateBytes+2+2*PlayerStateBytes;
     }
   invalid(ProtocolErrorCode::Type,"Unknown co-op message type");
   }
@@ -92,12 +92,14 @@ void validatePayload(const Message& message) {
       invalid(ProtocolErrorCode::Fields,"Too many pickup transfers");
     for(size_t i=0; i<poses->pickups.size(); ++i) {
       const auto& p = poses->pickups[i];
-      if(p.player<1 || p.player>2 || p.actor==0 || p.item==0 || p.actor==p.item ||
+      const bool countValid = p.item==0 ? (p.amount>0 && p.before<=UINT32_MAX && p.amount<=p.before && p.after==p.before-p.amount) :
+                                        (p.amount>0 && p.before<=UINT32_MAX && p.amount<=UINT32_MAX-p.before && p.after==p.before+p.amount);
+      if(p.player<1 || p.player>2 || p.actor==0 || p.actor==p.item ||
          p.actor!=poses->actors[p.player-1].object || p.instance>UINT32_MAX ||
-         p.amount==0 || p.before>UINT32_MAX || p.amount>UINT32_MAX-p.before || p.after!=p.before+p.amount)
+         !countValid)
         invalid(ProtocolErrorCode::Fields,"Invalid pickup transfer");
       for(size_t j=0; j<i; ++j)
-        if(poses->pickups[j].item==p.item)
+        if(p.item!=0 && poses->pickups[j].item==p.item)
           invalid(ProtocolErrorCode::Fields,"Repeated pickup item");
       }
     if(poses->world==0 || poses->actors[0].player!=1 || poses->actors[1].player!=2 ||
@@ -125,6 +127,14 @@ void validatePayload(const Message& message) {
         invalid(ProtocolErrorCode::Fields,"Invalid combat state");
       };
     for(const auto& state:poses->progression) validateCombat(state);
+    for(const auto& state:poses->personal) {
+      for(auto value:state.skills) if(value<0 || value>6) invalid(ProtocolErrorCode::Fields,"Invalid talent skill");
+      for(auto value:state.values) if(value<0 || value>100) invalid(ProtocolErrorCode::Fields,"Invalid talent value");
+      for(auto value:state.counters) if(value<0) invalid(ProtocolErrorCode::Fields,"Invalid personal counter");
+      if(state.heldItem>uint64_t(UINT32_MAX)+1 || (state.heldItem==0)!=state.heldSlot.empty() || state.heldSlot.size()>HeldSlotBytes)
+        invalid(ProtocolErrorCode::Fields,"Invalid held consumable");
+      for(char c:state.heldSlot) if(c<32 || c>126) invalid(ProtocolErrorCode::Fields,"Invalid held item slot");
+      }
     if(poses->npcs.size()>MaxCombatNpcs) invalid(ProtocolErrorCode::Fields,"Too many combat NPCs");
     for(size_t i=0; i<poses->npcs.size(); ++i) {
       const auto& npc=poses->npcs[i];
@@ -147,7 +157,7 @@ void validatePayload(const Message& message) {
       invalid(ProtocolErrorCode::Size,"Invalid snapshot chunk");
     }
   if(auto input = std::get_if<Input>(&message.payload)) {
-    if(input->equipmentAction>2 || (input->equipmentItem==0)!=(input->equipmentAction==0) ||
+    if(input->equipmentAction>3 || (input->equipmentItem==0)!=(input->equipmentAction==0) ||
        input->equipmentItem>uint64_t(UINT32_MAX)+1 || (input->equipmentItem!=0 && input->pickupItem!=0))
       invalid(ProtocolErrorCode::Fields,"Invalid equipment intent");
     if((input->pickupWorld==0)!=(input->pickupItem==0) || (input->buttons & ~KnownButtons)!=0 ||
@@ -282,12 +292,25 @@ Message decode(std::span<const uint8_t> bytes) {
         }
       for(auto& state:poses.progression) readCombat(state);
       const auto npcCount=integer(2);
-      if(npcCount>MaxCombatNpcs || offset+npcCount*(ActorPoseBytes+CombatStateBytes)!=bytes.size())
+      if(npcCount>MaxCombatNpcs || offset+npcCount*(ActorPoseBytes+CombatStateBytes)+2*PlayerStateBytes!=bytes.size())
         invalid(ProtocolErrorCode::Size,"Invalid combat NPC count");
       for(size_t i=0;i<npcCount;++i) {
         CombatNpc npc;
         readActor(npc.pose); readCombat(npc.state);
         poses.npcs.push_back(std::move(npc));
+        }
+      for(auto& state:poses.personal) {
+        for(auto& value:state.skills) value=std::bit_cast<int32_t>(uint32_t(integer(4)));
+        for(auto& value:state.values) value=std::bit_cast<int32_t>(uint32_t(integer(4)));
+        for(auto& value:state.counters) value=std::bit_cast<int32_t>(uint32_t(integer(4)));
+        state.heldItem=integer(8);
+        bool padding=false;
+        for(size_t i=0;i<HeldSlotBytes;++i) {
+          const char c=char(integer(1));
+          if(c==0) padding=true;
+          else if(padding) invalid(ProtocolErrorCode::Fields,"Invalid held slot padding");
+          else state.heldSlot.push_back(c);
+          }
         }
       message.payload = std::move(poses);
       break;
@@ -404,6 +427,14 @@ Bytes encode(const Message& message) {
       for(const auto& state:poses.progression) writeCombat(state);
       put(bytes,poses.npcs.size(),2);
       for(const auto& npc:poses.npcs) { writeActor(npc.pose); writeCombat(npc.state); }
+      for(const auto& state:poses.personal) {
+        for(auto value:state.skills) put(bytes,uint32_t(value),4);
+        for(auto value:state.values) put(bytes,uint32_t(value),4);
+        for(auto value:state.counters) put(bytes,uint32_t(value),4);
+        put(bytes,state.heldItem,8);
+        bytes.insert(bytes.end(),state.heldSlot.begin(),state.heldSlot.end());
+        bytes.resize(bytes.size()+HeldSlotBytes-state.heldSlot.size(),0);
+        }
       break;
       }
     case MessageType::SnapshotBegin: {
@@ -511,6 +542,8 @@ std::optional<Message> Decoder::pop() {
   queuedBytes -= HeaderBytes+bodySize(messageType(message));
   if(auto chunk = std::get_if<SnapshotChunk>(&message.payload))
     queuedBytes -= chunk->data.size();
+  if(auto poses = std::get_if<Poses>(&message.payload))
+    queuedBytes -= poses->pickups.size()*PickupBytes+poses->npcs.size()*(ActorPoseBytes+CombatStateBytes);
   return message;
   }
 

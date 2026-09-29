@@ -132,6 +132,8 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("pickup_accepted"); out.Uint64(networkPickupAccepted);
   out.Key("equipment_requests"); out.Uint64(networkEquipmentRequests);
   out.Key("equipment_accepted"); out.Uint64(networkEquipmentAccepted);
+  out.Key("consumable_requests"); out.Uint64(networkConsumableRequests);
+  out.Key("consumable_accepted"); out.Uint64(networkConsumableAccepted);
   out.Key("acknowledged_revision"); out.Uint64(net.acknowledgedRevision);
   out.Key("held_buttons"); out.Uint(networkButtons);
   out.Key("remote_buttons"); out.Uint(remoteButtons);
@@ -273,6 +275,17 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       out.Key("hp"); out.Int(actor->attribute(ATR_HITPOINTS));
       out.Key("hp_max"); out.Int(actor->attribute(ATR_HITPOINTSMAX));
       combatInfo(*actor);
+      out.Key("body_state"); out.Int(int(actor->bodyStateMasked()));
+      const auto personal=actor->networkPlayerState();
+      out.Key("held_item"); out.Uint64(personal.heldItem);
+      out.Key("held_slot"); str(personal.heldSlot);
+      out.Key("learning_counters"); out.StartArray();
+      for(auto name : {"REAL_STRENGTH", "REAL_DEXTERITY", "REAL_MANA_MAX"}) {
+        auto symbol = world->script().findSymbol(name);
+        const int index = symbol ? symbol->get_int() : -1;
+        if(index>=0 && index<100) out.Int(actor->handle().aivar[index]); else out.Null();
+        }
+      out.EndArray();
       out.Key("talent_skills"); out.StartArray();
       for(int i=0;i<TALENT_MAX_G2;++i) out.Int(actor->talentSkill(Talent(i)));
       out.EndArray();
@@ -666,6 +679,19 @@ void MainWindow::pollTestControl() {
       for(const auto& talent:cmd["talents"].GetArray()) {
         actor->setTalentSkill(Talent(talent[0].GetInt()),talent[1].GetInt());
         actor->setTalentValue(Talent(talent[0].GetInt()),talent[2].GetInt());
+        }
+      }
+    else if(action=="fixture_consumables") {
+      if(!game.world()->isAuthoritative() || network.status().bindings!=0)
+        throw std::runtime_error("Consumable fixture requires an unconnected authoritative host");
+      auto actor = game.world()->playerById(testInputPlayer);
+      for(auto name : {"ITFO_BREAD", "ITFO_CHEESE", "ITFO_FISH", "ITFOMUTTON", "ITFO_APPLE",
+                      "ITPO_HEALTH_01", "ITPO_HEALTH_02", "ITPO_HEALTH_03", "ITPO_HEALTH_ADDON_04",
+                      "ITPO_MANA_01", "ITPO_MANA_02", "ITPO_MANA_03", "ITPO_MANA_ADDON_04",
+                      "ITPO_PERM_STR", "ITPO_PERM_DEX", "ITPO_PERM_HEALTH", "ITPO_PERM_MANA"}) {
+        const auto instance = game.world()->script().findSymbolIndex(name);
+        if(instance==size_t(-1)) throw std::runtime_error("Missing original consumable instance");
+        actor->addItem(instance,3);
         }
       }
     else if(action=="fixture_weapons") {

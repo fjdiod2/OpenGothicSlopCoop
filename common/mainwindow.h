@@ -123,6 +123,7 @@ class MainWindow : public Tempest::Window {
     void networkKey(Tempest::KeyEvent& event, bool down);
     void sendNetworkInput(int x=0, int y=0, uint64_t pickupWorld=0, uint64_t pickupItem=0);
     void sendNetworkEquipment(size_t instance, bool equipped);
+    void sendNetworkConsumable(size_t instance);
     void tickNetworkInput(bool apply = false);
     void updateNetworkPoses();
     std::set<Tempest::Event::KeyType> networkKeys;
@@ -131,8 +132,10 @@ class MainWindow : public Tempest::Window {
     uint64_t networkInstalledInput = 0;
     uint64_t networkPickupRequests = 0, networkPickupAccepted = 0;
     uint64_t networkEquipmentRequests = 0, networkEquipmentAccepted = 0;
+    uint64_t networkConsumableRequests = 0, networkConsumableAccepted = 0;
     std::array<Coop::WeaponEquipment,2> networkEquipmentSent;
     std::array<Coop::CombatState,2> networkProgressSent;
+    std::array<Coop::PlayerState,2> networkPersonalSent;
     std::map<uint64_t,Coop::CombatNpc> networkCombatSent;
     size_t networkCombatCursor = 0;
     Coop::PoseInterpolation networkInterpolation;

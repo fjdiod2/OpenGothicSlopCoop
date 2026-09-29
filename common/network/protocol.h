@@ -16,7 +16,7 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 7;
+inline constexpr uint16_t ProtocolVersion = 8;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
@@ -30,6 +30,9 @@ inline constexpr size_t PickupBytes = 7*8;
 inline constexpr size_t ActorPoseBytes = 49+MaxAnimationLayers*(AnimationNameBytes+21);
 inline constexpr size_t CombatStateBytes = 66;
 inline constexpr size_t MaxCombatNpcs = 32;
+inline constexpr size_t TalentCount = 22;
+inline constexpr size_t HeldSlotBytes = 32;
+inline constexpr size_t PlayerStateBytes = 2*TalentCount*4+3*4+8+HeldSlotBytes;
 
 enum class MessageType : uint16_t {
   Hello = 1, Welcome = 2, Input = 3, StateAck = 4, Reject = 5, Accepted = 6,
@@ -65,8 +68,8 @@ struct Input {
   uint32_t buttons = 0;
   int16_t  lookX = 0, lookY = 0;
   uint64_t pickupWorld = 0, pickupItem = 0; // Both zero, or one explicit item request.
-  uint64_t equipmentItem = 0; // Inventory instance + 1; zero means no equipment intent.
-  uint8_t  equipmentAction = 0; // 0 none, 1 equip, 2 unequip. Desired state, not toggle.
+  uint64_t equipmentItem = 0; // Inventory instance + 1; zero means no inventory intent.
+  uint8_t  equipmentAction = 0; // 0 none, 1 equip, 2 unequip, 3 consume once.
   bool operator==(const Input&) const = default;
   };
 struct StateAck {
@@ -107,6 +110,7 @@ struct ActorPose {
   bool operator==(const ActorPose&) const = default;
   };
 struct Pickup {
+  // item==0: an inventory removal; otherwise a world pickup. One ordered stream.
   uint64_t player = 0, actor = 0, item = 0, instance = 0;
   uint64_t amount = 0, before = 0, after = 0;
   bool operator==(const Pickup&) const = default;
@@ -127,6 +131,13 @@ struct CombatNpc {
   CombatState state;
   bool operator==(const CombatNpc&) const = default;
   };
+struct PlayerState {
+  std::array<int32_t,TalentCount> skills = {}, values = {};
+  std::array<int32_t,3> counters = {}; // REAL_STRENGTH, REAL_DEXTERITY, REAL_MANA_MAX.
+  uint64_t heldItem = 0; // Instance + 1, or zero; presentation only.
+  std::string heldSlot;
+  bool operator==(const PlayerState&) const = default;
+  };
 struct Poses {
   uint64_t world = 0, tick = 0, appliedInput = 0;
   std::array<ActorPose,2> actors;
@@ -134,6 +145,7 @@ struct Poses {
   std::vector<Pickup> pickups; // Ordered, atomic transfers at this revision.
   std::array<CombatState,2> progression;
   std::vector<CombatNpc> npcs; // Bounded updates to NPCs in the initial snapshot.
+  std::array<PlayerState,2> personal;
   bool operator==(const Poses&) const = default;
   };
 struct PoseAck { bool operator==(const PoseAck&) const = default; };
