@@ -125,6 +125,7 @@ class DialogMenu : public Tempest::Widget {
 
     bool onStart(Npc& pl,Npc& other);
     bool guestChoiceAllowed(const GameScript::DlgChoice& entry) const;
+    bool trainingChoice(const GameScript::DlgChoice& entry) const;
     void sendRemote(uint8_t action, uint64_t target=0);
     bool localOwner() const;
     void onEntry(const GameScript::DlgChoice& e);
@@ -160,6 +161,9 @@ class DialogMenu : public Tempest::Widget {
     bool                                replica=false, replicaChoices=false;
     uint64_t                            conversationOwner=0, conversationId=0, conversationRevision=0;
     Npc*                                stagedPlayer=nullptr;
+    bool                                executingTraining=false;
+    int32_t                             trainingBowBefore=0;
+    std::string                         trainingMessage;
     State                               state=State::Idle;
     Entry                               current;
     Tempest::SoundEffect                currentSnd;

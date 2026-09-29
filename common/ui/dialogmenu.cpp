@@ -220,7 +220,7 @@ bool DialogMenu::isNpcInDialog(const Npc* npc) const {
   }
 
 bool DialogMenu::aiOutput(Npc &npc, std::string_view msg) {
-  if(&npc!=pl && &npc!=other){
+  if(&npc!=pl && &npc!=other && &npc!=stagedPlayer){
     Log::e("unexpected aiOutput call: ",msg.data());
     return true;
     }
@@ -241,7 +241,7 @@ bool DialogMenu::aiOutput(Npc &npc, std::string_view msg) {
   current.msgTime = Gothic::inst().messageTime(msg);
   current.time    = current.msgTime + (dlgAnimation ? ANIM_TIME*2 : 0);
   currentSnd      = soundDevice.load(Resources::loadSoundBuffer(string_frm(msg,".wav")));
-  curentIsPl      = (pl==&npc);
+  curentIsPl      = (pl==&npc || stagedPlayer==&npc);
 
   currentSnd.play();
   npc.setAiOutputBarrier(current.msgTime,false);
@@ -278,11 +278,11 @@ bool DialogMenu::hasContent() const {
   }
 
 bool DialogMenu::onStart(Npc &p, Npc &ot) {
-  choice         = ot.dialogChoices(p,except,state==State::PreStart);
+  choice         = ot.dialogChoices(p,except,state==State::PreStart,stagedPlayer);
   // Automatic important infos cannot be selected safely by a remote owner unless audited.
   if(conversationOwner==2)
     std::erase_if(choice,[&](const auto& c) { return c.title.empty() && !guestChoiceAllowed(c); });
-  if(conversationOwner==2 && choice.empty()) choice=ot.dialogChoices(p,except,false);
+  if(conversationOwner==2 && choice.empty()) choice=ot.dialogChoices(p,except,false,stagedPlayer);
   ++conversationRevision;
   state          = State::Active;
   depth          = 0;
@@ -300,6 +300,7 @@ bool DialogMenu::onStart(Npc &p, Npc &ot) {
   }
 
 void DialogMenu::printScreen(std::string_view msg, int x, int y, int time, const GthFont &font) {
+  if(executingTraining) trainingMessage=msg;
   PScreen e;
   e.txt  = msg;
   e.font = &font;
@@ -357,6 +358,9 @@ void DialogMenu::onDoneText() {
 void DialogMenu::close() {
   auto prevPl  = pl;
   auto prevNpc = other;
+  auto prevStage = stagedPlayer;
+  trainingMessage.clear();
+  trainingBowBefore=0;
 
   conversationOwner=0;
   stagedPlayer=nullptr;
@@ -372,6 +376,7 @@ void DialogMenu::close() {
   update();
 
   if(replica) { replica=false; replicaChoices=false; return; }
+  if(prevStage && prevStage!=prevPl) prevStage->resetDialogueOutput();
   if(prevPl!=nullptr && prevPl==prevNpc){
     auto i = prevPl->interactive();
     if(i!=nullptr)
@@ -386,6 +391,7 @@ void DialogMenu::close() {
   }
 
 bool DialogMenu::haveToWaitOutput() const {
+  if(stagedPlayer && stagedPlayer!=pl && stagedPlayer->haveOutput()) return true;
   if(pl && pl->haveOutput()){
     return true;
     }
@@ -407,6 +413,7 @@ void DialogMenu::startTrade() {
 
 void DialogMenu::skipPhrase() {
   if(current.time>0) {
+    if(stagedPlayer && stagedPlayer!=pl) stagedPlayer->setAiOutputBarrier(0,false);
     if(pl!=nullptr)
       pl->setAiOutputBarrier(0,false);
     if(other!=nullptr)
@@ -427,7 +434,14 @@ void DialogMenu::onEntry(const GameScript::DlgChoice &e) {
     depth    = 1;
     dlgTrade = e.isTrade;
     except.push_back(e.scriptFn);
-    Gothic::inst().dialogExec(e,*pl,*other);
+    trainingMessage.clear();
+    if(trainingChoice(e) && stagedPlayer) {
+      struct Restore { bool& flag; ~Restore() { flag=false; } } restore{executingTraining};
+      executingTraining=true;
+      Gothic::inst().world()->script().exec(e,*pl,*other,stagedPlayer,&trainingBowBefore);
+      } else {
+      Gothic::inst().dialogExec(e,*pl,*other);
+      }
 
     onDoneText();
     }
@@ -643,7 +657,7 @@ void DialogMenu::saveNetwork(Serialize& out) const {
   out.write(conversationOwner,conversationId,conversationRevision,world->objectId(stagedPlayer));
   out.write(isActive(),isChoiceMenuActive(),curentIsPl,
             world->objectId(pl),world->objectId(other),uint32_t(dlgSel),
-            current.time>0 ? current.txt : std::string(),uint32_t(choice.size()));
+            current.time>0 ? current.txt : trainingMessage,uint32_t(choice.size()));
   for(const auto& c:choice) {
     const auto title=conversationOwner==2 && !guestChoiceAllowed(c) ? c.title+" [Host only]" : c.title;
     out.write(title,c.scriptFn);
@@ -698,7 +712,18 @@ bool DialogMenu::localOwner() const {
   return !isActive() || conversationOwner==(Gothic::inst().isGuest() ? 2u : 1u);
   }
 
+bool DialogMenu::trainingChoice(const GameScript::DlgChoice& e) const {
+  const auto symbol=Gothic::inst().world()->script().findSymbol(e.scriptFn);
+  if(!symbol || e.isTrade) return false;
+  const std::string_view allowed[]={
+    "DIA_BARTOK_TEACH_INFO", "DIA_BARTOK_TEACH_BOW_1", "DIA_BARTOK_TEACH_BOW_5",
+    "DIA_BARTOK_TEACH_BACK", "DIA_BARTOK_TEACHSNEAK_INFO",
+    "DIA_CARL_TEACH_INFO", "DIA_CARL_TEACH_STR_1", "DIA_CARL_TEACH_STR_5", "DIA_CARL_TEACH_BACK"};
+  return std::find(std::begin(allowed),std::end(allowed),symbol->name())!=std::end(allowed);
+  }
+
 bool DialogMenu::guestChoiceAllowed(const GameScript::DlgChoice& e) const {
+  if(trainingChoice(e)) return true;
   if(e.isTrade) return false;
   const auto symbol=Gothic::inst().world()->script().findSymbol(e.scriptFn);
   if(!symbol) return false;
@@ -708,6 +733,7 @@ bool DialogMenu::guestChoiceAllowed(const GameScript::DlgChoice& e) const {
     "DIA_BOSPER_HALLO_INFO", "DIA_BOSPER_SEEKWORK_INFO", "DIA_BOSPER_BARTOK_INFO",
     "DIA_BOSPER_BOGENRUNNING_INFO", "DIA_BOSPER_BOGENSUCCESS_INFO", "DIA_BOSPER_EXIT_INFO",
     "DIA_BARTOK_HALLO_INFO", "DIA_BARTOK_BOSPER_INFO", "DIA_BARTOK_EXIT_INFO",
+    "DIA_CARL_EXIT_INFO",
     "DIA_LARES_HALLO_INFO", "DIA_LARES_HALLO_YES", "DIA_LARES_HALLO_LEE",
     "DIA_LARES_KAP3_EXIT_INFO", "DIA_ADDON_LARES_PATCH_INFO", "DIA_GAROND_EXIT_INFO"};
   return std::find(std::begin(allowed),std::end(allowed),symbol->name())!=std::end(allowed);
@@ -723,10 +749,11 @@ bool DialogMenu::beginGuest(Npc& npc) {
   auto symbol=world->script().findSymbol(npc.instanceSymbol());
   if(!symbol) return false;
   const auto name=symbol->name();
-  if(name!="VLK_413_BOSPER" && name!="VLK_440_BARTOK" && name!="VLK_449_LARES" && name!="PAL_250_GAROND") return false;
+  if(name!="VLK_413_BOSPER" && name!="VLK_440_BARTOK" && name!="VLK_449_LARES" && name!="PAL_250_GAROND" && name!="VLK_461_CARL") return false;
   if(!npc.beginStoryDialog(*story)) return false;
   conversationOwner=2;
   stagedPlayer=stage;
+  stage->shareDialogueOutput(*story);
   stage->stopWalking();
   npc.setDirection(stage->position()-npc.position());
   return true;

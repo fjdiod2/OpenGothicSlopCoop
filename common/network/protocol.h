@@ -16,7 +16,7 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 10;
+inline constexpr uint16_t ProtocolVersion = 11;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;

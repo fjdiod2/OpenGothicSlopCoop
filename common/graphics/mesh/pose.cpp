@@ -117,12 +117,17 @@ std::vector<Coop::AnimationLayer> Pose::networkLayers() const {
   }
 
 bool Pose::validateNetworkLayers(const std::vector<Coop::AnimationLayer>& layers, const AnimationSolver& solver) const {
-  std::vector<uint32_t> occupied;
   for(auto& layer:layers) {
     const auto seq = solver.solveFrm(layer.name);
-    if(!seq || !seq->data || layer.combination>seq->comb.size() ||
-       std::find(occupied.begin(),occupied.end(),seq->layer)!=occupied.end()) return false;
-    occupied.push_back(seq->layer);
+    // Item-state transitions can change a sequence's layer without replacing
+    // another active sequence on that layer (e.g. potion ending + S_WALK).
+    // Replicate the host's ordered pose, including those legitimate overlaps.
+    if(!seq || !seq->data || layer.combination>seq->comb.size()) {
+      Log::e("Invalid projected animation: ",layer.name," found=",seq!=nullptr,
+             " data=",seq && seq->data!=nullptr," layer=",seq ? int(seq->layer) : -1,
+             " combination=",int(layer.combination)," choices=",seq ? int(seq->comb.size()) : -1);
+      return false;
+      }
     }
   return true;
   }

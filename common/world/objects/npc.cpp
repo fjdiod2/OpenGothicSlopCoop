@@ -409,6 +409,25 @@ bool Npc::validateNetworkPose(const Coop::ActorPose& pose) const {
          visual.validateNetworkLayers(pose.layers);
   }
 
+void Npc::saveNetworkLearning(Serialize& out) const {
+  for(auto value:hnpc->hitchance) out.write(value);
+  for(auto name:{"REAL_TALENT_1H","REAL_TALENT_2H","REAL_TALENT_BOW","REAL_TALENT_CROSSBOW"})
+    out.write(hnpc->aivar[owner.script().findSymbol(name)->get_int()]);
+  }
+
+void Npc::applyNetworkLearning(Serialize& in) {
+  if(owner.isAuthoritative()) throw std::runtime_error("Learning projection is guest-only");
+  std::array<int32_t,9> values;
+  for(auto& value:values) {
+    in.read(value);
+    if(value<0 || value>1000000) throw std::runtime_error("Invalid projected learning value");
+    }
+  std::copy_n(values.begin(),5,hnpc->hitchance);
+  size_t i=5;
+  for(auto name:{"REAL_TALENT_1H","REAL_TALENT_2H","REAL_TALENT_BOW","REAL_TALENT_CROSSBOW"})
+    hnpc->aivar[owner.script().findSymbol(name)->get_int()]=values[i++];
+  }
+
 Coop::PlayerState Npc::networkPlayerState() const {
   static_assert(Coop::TalentCount==TALENT_MAX_G2);
   Coop::PlayerState state;
@@ -4325,6 +4344,10 @@ bool Npc::beginStoryDialog(Npc& story) {
   return true;
   }
 
+void Npc::shareDialogueOutput(Npc& story) {
+  outputPipe=story.outputPipe;
+  }
+
 void Npc::resetDialogueOutput() {
   clearAiQueue();
   setAiOutputBarrier(0,false);
@@ -4662,8 +4685,8 @@ void Npc::transformBack() {
   transformSpl.reset();
   }
 
-std::vector<GameScript::DlgChoice> Npc::dialogChoices(Npc& player,const std::vector<uint32_t> &except,bool includeImp) {
-  return owner.script().dialogChoices(player.hnpc,this->hnpc,except,includeImp);
+std::vector<GameScript::DlgChoice> Npc::dialogChoices(Npc& player,const std::vector<uint32_t> &except,bool includeImp,Npc* learner) {
+  return owner.script().dialogChoices(player.hnpc,this->hnpc,except,includeImp,learner);
   }
 
 bool Npc::isAiQueueEmpty() const {

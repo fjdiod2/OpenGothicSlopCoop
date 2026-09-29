@@ -481,8 +481,15 @@ void MainWindow::updateNetworkPoses() {
         }
       for(const auto& npc:poses.npcs) {
         auto actor=world->npcByObjectId(poses.world,npc.pose.object);
-        if(!actor || actor->isPlayer() || !actor->validateNetworkPose(npc.pose) || !actor->validateNetworkCombatState(npc.state))
-          throw std::runtime_error("Unknown combat NPC, reference or animation");
+        if(!actor || actor->isPlayer())
+          throw std::runtime_error("Unknown combat NPC: "+std::to_string(npc.pose.object));
+        if(!actor->validateNetworkPose(npc.pose)) {
+          for(const auto& layer:npc.pose.layers)
+            Tempest::Log::e("Rejected NPC animation: ",npc.pose.object," ",layer.name," combination=",int(layer.combination));
+          throw std::runtime_error("Invalid combat NPC pose: "+std::to_string(npc.pose.object));
+          }
+        if(!actor->validateNetworkCombatState(npc.state))
+          throw std::runtime_error("Unknown combat reference for NPC: "+std::to_string(npc.pose.object));
         }
       if(!world->applyNetworkInventory(poses.pickups,poses.equipment,poses.personal))
         throw std::runtime_error("Inventory update does not match the snapshot state");
@@ -522,6 +529,7 @@ Coop::Bytes MainWindow::networkStory() {
   Serialize out(writer);
   out.setEntry("story");
   dialogs.saveNetwork(out);
+  for(uint64_t player=1;player<=2;++player) world->playerById(player)->saveNetworkLearning(out);
   world->script().saveQuests(out);
   out.write(uint32_t(networkStoryNpc==0 ? 1 : 2));
   const auto inventory=[&](const Npc& npc) {
@@ -567,6 +575,7 @@ void MainWindow::applyNetworkStory(const Coop::Bytes& bytes) {
     clearInput();
     inventory.close();
     }
+  for(uint64_t player=1;player<=2;++player) world->playerById(player)->applyNetworkLearning(in);
   world->script().applyNetworkQuests(in);
   uint32_t count=0;
   in.read(count);

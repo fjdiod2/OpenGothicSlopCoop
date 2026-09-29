@@ -255,6 +255,9 @@ class Npc final {
     void      startDialog(Npc& other);
     bool      beginStoryDialog(Npc& story);
     void      resetDialogueOutput();
+    void      shareDialogueOutput(Npc& story);
+    void      saveNetworkLearning(Serialize& out) const;
+    void      applyNetworkLearning(Serialize& in);
     bool      startState(ScriptFn id, std::string_view wp);
     bool      startState(ScriptFn id, std::string_view wp, gtime endTime, bool noFinalize);
     void      clearState(bool noFinalize);
@@ -346,7 +349,7 @@ class Npc final {
     void      startDive();
     void      transformBack();
 
-    auto      dialogChoices(Npc &player, const std::vector<uint32_t> &except, bool includeImp) -> std::vector<GameScript::DlgChoice>;
+    auto      dialogChoices(Npc &player, const std::vector<uint32_t> &except, bool includeImp, Npc* learner=nullptr) -> std::vector<GameScript::DlgChoice>;
 
     zenkit::INpc&                        handle() { return *hnpc; }
     const std::shared_ptr<zenkit::INpc>& handlePtr() const { return hnpc; }

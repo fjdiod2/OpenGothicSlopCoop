@@ -138,9 +138,9 @@ class GameScript final {
     const zenkit::ISpell&       spellDesc(int32_t splId);
     const VisualFx*             spellVfx (int32_t splId);
 
-    auto dialogChoices(std::shared_ptr<zenkit::INpc> self, std::shared_ptr<zenkit::INpc> npc, const std::vector<uint32_t> &except, bool includeImp) -> std::vector<DlgChoice>;
+    auto dialogChoices(std::shared_ptr<zenkit::INpc> self, std::shared_ptr<zenkit::INpc> npc, const std::vector<uint32_t> &except, bool includeImp, Npc* learner=nullptr) -> std::vector<DlgChoice>;
     auto updateDialog (const GameScript::DlgChoice &dlg, Npc &player, Npc &npc) -> std::vector<GameScript::DlgChoice>;
-    void exec(const DlgChoice &dlg, Npc &player, Npc &npc);
+    void exec(const DlgChoice &dlg, Npc &player, Npc &npc, Npc* learner=nullptr, int32_t* bowBefore=nullptr);
 
     struct DialogueCall {
       bool action;

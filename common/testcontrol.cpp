@@ -715,7 +715,7 @@ void MainWindow::pollTestControl() {
         throw std::runtime_error("Dialogue NPC fixture requires held offline gameplay");
       if(!cmd.HasMember("symbol") || !cmd["symbol"].IsString()) throw std::runtime_error("Expected NPC instance");
       const std::string_view name=cmd["symbol"].GetString();
-      if(name!="VLK_413_BOSPER" && name!="VLK_440_BARTOK" && name!="VLK_449_LARES" && name!="PAL_250_GAROND") throw std::runtime_error("Unsupported dialogue fixture NPC");
+      if(name!="VLK_413_BOSPER" && name!="VLK_440_BARTOK" && name!="VLK_449_LARES" && name!="PAL_250_GAROND" && name!="VLK_461_CARL") throw std::runtime_error("Unsupported dialogue fixture NPC");
       const auto instance=world->script().findSymbolIndex(name);
       if(instance==size_t(-1)) throw std::runtime_error("Missing original NPC definition");
       for(uint32_t i=0;i<world->npcCount();++i)
@@ -809,6 +809,27 @@ void MainWindow::pollTestControl() {
         if(cls==size_t(-1) || !game.world()->addItem(cls,pos))
           throw std::runtime_error("Cannot create shared plant fixture");
         }
+      }
+    else if(action=="fixture_training_budget") {
+      auto world=game.world();
+      if(!world->isAuthoritative() || runtimeMode!=R_Suspended || dialogs.isActive() ||
+         network.status().role!=Coop::Role::Disabled)
+        throw std::runtime_error("Training prerequisites require held offline gameplay");
+      auto npc=world->playerById(testInputPlayer);
+      const auto integer=[&](const char* key, int maximum) {
+        if(!cmd.HasMember(key) || !cmd[key].IsInt() || cmd[key].GetInt()<0 || cmd[key].GetInt()>maximum)
+          throw std::runtime_error(std::string("Invalid initial training budget: ")+key);
+        return cmd[key].GetInt();
+        };
+      const auto lp=integer("lp",1000), gold=integer("gold",10000), strength=integer("strength",200),
+                 strengthLearned=integer("strength_learned",200), bow=integer("bow",100), bowLearned=integer("bow_learned",100);
+      npc->handle().lp=lp;
+      npc->handle().attribute[ATR_STRENGTH]=strength;
+      npc->handle().hitchance[3]=bow;
+      auto& script=world->script();
+      npc->handle().aivar[script.findSymbol("REAL_STRENGTH")->get_int()]=strengthLearned;
+      npc->handle().aivar[script.findSymbol("REAL_TALENT_BOW")->get_int()]=bowLearned;
+      npc->addItem(script.goldId()->index(),size_t(gold));
       }
     else if(action=="fixture_learning_points") {
       if(!game.world()->isAuthoritative() || network.status().boundPlayer!=0 ||

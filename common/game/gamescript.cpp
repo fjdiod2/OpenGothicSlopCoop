@@ -941,7 +941,7 @@ const VisualFx* GameScript::spellVfx(int32_t splId) {
 std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zenkit::INpc> player,
                                                              std::shared_ptr<zenkit::INpc> hnpc,
                                                              const std::vector<uint32_t>& except,
-                                                             bool includeImp) {
+                                                             bool includeImp, Npc* learner) {
   ScopeVar self (*vm.global_self(),  hnpc);
   ScopeVar other(*vm.global_other(), player);
   std::vector<zenkit::IInfo*> hDialog;
@@ -976,6 +976,10 @@ std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zen
       if(info.condition) {
         auto* conditionSymbol = vm.find_symbol_by_index(uint32_t(info.condition));
         if (conditionSymbol != nullptr) {
+          // This audited condition combines shared Bartok access with the
+          // learner's unlearned-sneak check; it has no personal story gates.
+          const bool personal=learner && conditionSymbol->name()=="DIA_BARTOK_TEACHSNEAK_CONDITION";
+          ScopeVar conditionOther(*vm.global_other(),personal ? learner->handlePtr() : player);
           observeDialogueCall(uint32_t(info.condition),false);
           valid = runFunction<int>(conditionSymbol) != 0;
           }
@@ -1024,7 +1028,7 @@ std::vector<GameScript::DlgChoice> GameScript::updateDialog(const GameScript::Dl
   return ret;
   }
 
-void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
+void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc, Npc* learner, int32_t* bowBefore) {
   if(!isAuthoritative()) return;
   ScopeVar self (*vm.global_self(), npc.handlePtr());
   ScopeVar other(*vm.global_other(), player.handlePtr());
@@ -1044,6 +1048,17 @@ void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
         ++i;
       }
     }
+  ScopeVar actionOther(*vm.global_other(),learner ? learner->handlePtr() : player.handlePtr());
+  ScopeVar actionHero(*vm.global_hero(),learner ? learner->handlePtr() : vm.global_hero()->get_instance());
+  // Bartok's sole scratch global belongs to this locked training conversation.
+  auto scratch=bowBefore ? vm.find_symbol_by_name("BOSPER_MERKEBOW") : nullptr;
+  struct RestoreScratch {
+    zenkit::DaedalusSymbol* symbol;
+    int32_t* value;
+    int32_t previous;
+    ~RestoreScratch() { if(symbol) { *value=symbol->get_int(); symbol->set_int(previous); } }
+    } restore{scratch,bowBefore,scratch ? scratch->get_int() : 0};
+  if(scratch) scratch->set_int(*bowBefore);
   observeDialogueCall(dlg.scriptFn,true);
   runFunction(vm.find_symbol_by_index(dlg.scriptFn));
   }

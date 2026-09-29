@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 10 (G09)
+# Co-op wire protocol, version 11 (P01)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -15,6 +15,8 @@ N07 makes the guest a presentation-only process; N08 transfers a host checkpoint
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
 
+Version 11 adds both players’ combat accuracy and learning counters to the story
+archive. Version-10 peers are rejected; checkpoints remain version 56.
 Version 10 appends dialogue intent to `Input` and a control lease to the story
 projection. Version-9 peers are rejected; checkpoints remain version 56.
 Version 9 appends an optional host dialogue/story projection to `Poses`. Version-8
@@ -64,7 +66,7 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `10` |
+| 8 | 2 | Version | Exactly `11` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
@@ -351,7 +353,10 @@ There is a separate 64-frame application queue; overflow closes the connection.
 The guest resolves both typed NPC IDs in the received world namespace and validates
 both animations, the complete pickup batch, both weapon-equipment records and
 all combat/personal states, held-item references, NPC identities, references and
-animations before applying anything. Invalid
+animations before applying anything. Known sequences may share an animation-layer
+number: original item-ending transitions can legitimately overlap the standing
+pose. Preserve their received order; do not impose layer-number uniqueness.
+Sequence lookup, sample data, combination bounds and wire bounds still apply. Invalid
 world/object/animation/transfer state closes the connection without partially
 applying the frame.
 
@@ -1082,7 +1087,7 @@ This 110-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 0000006e 000a 0003
+4f474350 0000006e 000b 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
@@ -1176,6 +1181,10 @@ The entry contains, in order:
   menu/subtitle revision and staging actor object ID. These use `Serialize` format.
 - Dialogue active/choices-visible/speaker-is-host flags; host and NPC object IDs;
   selected row; current subtitle; choice count and pairs of title/function symbol.
+- In version 11, host then companion each supply five signed i32 hit chances
+  and four signed i32 real combat-learning counters (1H, 2H, bow, crossbow).
+  These 72 bytes use `Serialize` encoding; accepted values are 0–1,000,000.
+  Replica installation writes actor fields directly without script callbacks.
 - Existing quest-log, known-info and guild-attitude records (`saveQuests`).
 - Inventory actor count, followed by object ID and existing inventory records for
   the host and the current/most recent dialogue NPC. Previously installed NPC
@@ -1273,3 +1282,42 @@ paladin letter to the host, 500 XP to each, completes the quest and sets
 is not a test of a chapter-3 map transition. Disk restart/rejoin preserves the
 completed action and does not offer it again. Guest voice/popup replication and
 scripted walk/cutscene staging beyond these audited paths remain limitations.
+
+
+## Independent learning with shared access (P01)
+
+The conversation owner is also the learner for the audited training entry,
+lesson and Back callbacks. Ordinary info conditions and known-info history still
+use the host story actor; SELF remains the trainer. Within each training action,
+OTHER and HERO are scoped to the learner and restored on return. No Daedalus files
+are modified and no guest VM executes scripts. Existing input sequence and
+conversation/menu revision checks fence duplicate and stale purchases.
+
+Enabled routes are Carl's strength +1/+5 and Bartok's bow +1/+5 and sneak lesson.
+Access unlocks and Carl's original 50-gold access fee remain host story effects.
+These lessons have no per-purchase gold fee. LP, cap checks, current stats, cost
+counters, learned sneak and combat skill categories belong to the learner.
+Bartok's permanent sneak condition is specifically audited: its shared access flag
+is combined with the learner's unlearned-sneak check, so one player learning does
+not hide the other's option. Other conditions remain host-bound.
+
+The original menu-building and purchase callbacks run in the same learner context,
+so displayed costs agree with deductions. Bartok's before-training bow scratch is
+held in the conversation and installed/restored around each action. It is not a
+personal story global and does not persist as an active transaction. Host saves
+remain deferred until the dialogue ends. Existing actor archives persist all
+learned outcomes; no checkpoint schema change is required.
+
+The guest participant uses the dialogue output pipe; output waits/skips and owner
+loss include that participant. Scope changes do not retarget queued output: the
+queue retains the actual NPC handles resolved when the original script calls it.
+The latest synchronous training PrintScreen result/refusal is carried in the
+existing projected text field when no spoken subtitle is active, alongside the
+choice menu. It clears on the next action or conversation close; this adds no
+Input fields or general reward-popup replication.
+
+A learning update changes the story archive comparison, transmitting the nine
+combat-learning fields per actor together with the menu state. Attribute/LP/talent
+and attribute-learning counters retain their existing progression/personal paths.
+Trading stays blocked for guests until P02. Other trainers and crafting globals
+are not enabled by this limited route policy.
