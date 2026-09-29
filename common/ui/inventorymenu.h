@@ -16,6 +16,7 @@ class World;
 class KeyCodec;
 
 class InventoryMenu : public Tempest::Widget {
+  friend class DialogMenu;
   public:
     InventoryMenu(const KeyCodec& key);
     ~InventoryMenu();
@@ -52,6 +53,10 @@ class InventoryMenu : public Tempest::Widget {
     uint64_t selectedItemInstance(); // Diagnostic: class + 1, zero if no selection.
     bool     selectedItemEquipped();
     void  onWorldChanged();
+    bool selling() const { return page==1; }
+    std::function<void(bool,size_t,size_t)> onTradeRequest;
+    std::function<void()> onTradeClose;
+    std::function<bool()> tradeInputAllowed;
     std::function<void(size_t,bool)> onEquipmentRequest;
     std::function<void(size_t)> onConsumableRequest;
 

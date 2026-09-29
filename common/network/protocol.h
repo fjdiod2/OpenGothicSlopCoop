@@ -16,7 +16,7 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 11;
+inline constexpr uint16_t ProtocolVersion = 12;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
@@ -71,7 +71,7 @@ struct Input {
   uint64_t pickupWorld = 0, pickupItem = 0; // Both zero, or one explicit item request.
   uint64_t equipmentItem = 0; // Inventory instance + 1; zero means no inventory intent.
   uint8_t  equipmentAction = 0; // 0 none, 1 equip, 2 unequip, 3 consume once.
-  uint8_t  dialogueAction = 0; // 1 open, 2 choose, 3 skip subtitle, 4 up, 5 down.
+  uint8_t  dialogueAction = 0; // 1 open, 2 choose, 3 skip, 4 up, 5 down, 6 buy, 7 sell, 8 close trade.
   uint64_t dialogueWorld = 0, dialogueTarget = 0, dialogueId = 0, dialogueRevision = 0;
   bool operator==(const Input&) const = default;
   };

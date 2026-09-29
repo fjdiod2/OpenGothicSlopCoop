@@ -329,6 +329,8 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       str(sym ? sym->name() : "");
       out.Key("name"); str(item.displayName());
       out.Key("count"); out.Uint64(count);
+      out.Key("buy_price"); out.Int(item.cost());
+      out.Key("sell_price"); out.Int(item.sellCost());
       out.Key("equipped"); out.Bool(equipped);
       out.Key("slot"); out.Uint(slot);
       out.Key("weapon"); out.Bool(item.isEquipmentWeapon());
@@ -340,6 +342,8 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       itemInfo(*it, it.count(),it.isEquipped(),it.slot());
     out.EndArray();
     out.Key("inventory_player_id"); out.Uint64(world->playerId(inventory.activePlayer()));
+    out.Key("inventory_trade"); out.Bool(inventory.isOpen()==InventoryMenu::State::Trade);
+    out.Key("inventory_selling"); out.Bool(inventory.selling());
     out.Key("inventory_selected"); out.Uint64(inventory.selectedItemInstance());
     out.Key("inventory_selected_equipped"); out.Bool(inventory.selectedItemEquipped());
     out.Key("inventory_items"); out.StartArray();
@@ -612,7 +616,7 @@ void MainWindow::pollTestControl() {
         {"W",Event::K_W}, {"A",Event::K_A}, {"S",Event::K_S}, {"D",Event::K_D},
         {"SPACE",Event::K_Space}, {"CTRL",Event::K_LControl}, {"ALT",Event::K_LAlt},
         {"TAB",Event::K_Tab}, {"ESC",Event::K_ESCAPE}, {"ENTER",Event::K_Return},
-        {"F",Event::K_F}, {"B",Event::K_B}, {"R",Event::K_R}
+        {"F",Event::K_F}, {"B",Event::K_B}, {"R",Event::K_R}, {"Z",Event::K_Z}, {"X",Event::K_X}
         };
       for(auto name:names) {
         auto found = Event::K_NoKey;
@@ -809,6 +813,15 @@ void MainWindow::pollTestControl() {
         if(cls==size_t(-1) || !game.world()->addItem(cls,pos))
           throw std::runtime_error("Cannot create shared plant fixture");
         }
+      }
+    else if(action=="fixture_vendor_chapter") {
+      auto world=game.world();
+      if(!world->isAuthoritative() || runtimeMode!=R_Suspended || dialogs.isActive() ||
+         network.status().role!=Coop::Role::Disabled)
+        throw std::runtime_error("Vendor chapter fixture requires held offline gameplay");
+      auto chapter=world->script().findSymbol("KAPITEL");
+      if(!chapter || chapter->get_int()!=0) throw std::runtime_error("Expected fresh arena chapter");
+      chapter->set_int(1); // Initial chapter prerequisite; original shop callback creates all stock.
       }
     else if(action=="fixture_training_budget") {
       auto world=game.world();

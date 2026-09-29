@@ -27,6 +27,7 @@ class DialogMenu : public Tempest::Widget {
     void onWorldChanged();
     void saveNetwork(Serialize& out) const;
     void applyNetwork(Serialize& in);
+    bool takeTradeInventoryUpdate();
     uint64_t owner() const { return conversationOwner; }
     uint64_t conversation() const { return conversationId; }
     uint64_t revision() const { return conversationRevision; }
@@ -143,6 +144,7 @@ class DialogMenu : public Tempest::Widget {
     Tempest::Size processTextMultiline(Tempest::Painter* p, int x, int y, int w, int h, std::string_view txt, bool isPl);
 
     void startTrade();
+    void tradeRequest(uint8_t action, uint64_t target=0);
     void skipPhrase();
 
     InventoryMenu&                      trade;
@@ -161,6 +163,7 @@ class DialogMenu : public Tempest::Widget {
     bool                                replica=false, replicaChoices=false;
     uint64_t                            conversationOwner=0, conversationId=0, conversationRevision=0;
     Npc*                                stagedPlayer=nullptr;
+    bool                                tradeInventoryDirty=false;
     bool                                executingTraining=false;
     int32_t                             trainingBowBefore=0;
     std::string                         trainingMessage;

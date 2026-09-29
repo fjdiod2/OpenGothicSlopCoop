@@ -1,4 +1,5 @@
 #include "dialogmenu.h"
+#include "world/objects/item.h"
 
 #include <Tempest/Painter>
 #include <Tempest/Log>
@@ -50,6 +51,11 @@ DialogMenu::DialogMenu(InventoryMenu &trade)
 
   Gothic::inst().onSettingsChanged.bind(this,&DialogMenu::setupSettings);
   setupSettings();
+  trade.tradeInputAllowed=[this] { return localOwner(); };
+  trade.onTradeRequest=[this](bool sell,size_t item,size_t count) {
+    tradeRequest(sell ? 7 : 6,(uint64_t(count)<<32)|uint64_t(item+1));
+    };
+  trade.onTradeClose=[this] { tradeRequest(8); };
   }
 
 DialogMenu::~DialogMenu() {
@@ -167,6 +173,7 @@ void DialogMenu::clear() {
   }
 
 void DialogMenu::onWorldChanged() {
+  tradeInventoryDirty=false;
   close();
   clear();
   }
@@ -356,6 +363,7 @@ void DialogMenu::onDoneText() {
   }
 
 void DialogMenu::close() {
+  trade.close();
   auto prevPl  = pl;
   auto prevNpc = other;
   auto prevStage = stagedPlayer;
@@ -406,8 +414,10 @@ bool DialogMenu::haveToShowSubtitles(bool isPl) const {
   }
 
 void DialogMenu::startTrade() {
+  tradeInventoryDirty=true;
   if(pl!=nullptr && other!=nullptr)
-    trade.trade(*pl,*other);
+    trade.trade(stagedPlayer ? *stagedPlayer : *pl,*other);
+  ++conversationRevision;
   dlgTrade=false;
   }
 
@@ -574,6 +584,7 @@ void DialogMenu::onSelect() {
   }
 
 void DialogMenu::mouseDownEvent(MouseEvent &event) {
+  if(trade.isOpen()==InventoryMenu::State::Trade) { trade.mouseDownEvent(event); return; }
   if(!localOwner()) { event.accept(); return; }
   if(replica) {
     if(event.button==MouseEvent::ButtonLeft && dlgSel<choice.size()) sendRemote(2,uint64_t(choice[dlgSel].scriptFn)+1);
@@ -594,6 +605,7 @@ void DialogMenu::mouseDownEvent(MouseEvent &event) {
   }
 
 void DialogMenu::mouseWheelEvent(MouseEvent &e) {
+  if(trade.isOpen()==InventoryMenu::State::Trade) { trade.mouseWheelEvent(e); return; }
   if(!localOwner()) { e.accept(); return; }
   if(replica) { sendRemote(e.delta>0 ? 4 : 5); e.accept(); return; }
   if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
@@ -610,6 +622,7 @@ void DialogMenu::mouseWheelEvent(MouseEvent &e) {
   }
 
 void DialogMenu::keyDownEvent(KeyEvent &e) {
+  if(trade.isOpen()==InventoryMenu::State::Trade) { trade.keyDownEvent(e); return; }
   if(!localOwner()) { e.accept(); return; }
   if(replica) {
     if(e.key==Event::K_Return && dlgSel<choice.size()) sendRemote(2,uint64_t(choice[dlgSel].scriptFn)+1);
@@ -645,6 +658,7 @@ void DialogMenu::keyDownEvent(KeyEvent &e) {
   }
 
 void DialogMenu::keyUpEvent(KeyEvent &event) {
+  if(trade.isOpen()==InventoryMenu::State::Trade) { trade.keyUpEvent(event); return; }
   if(state==State::Idle && current.time>0){
     event.ignore();
     return;
@@ -655,6 +669,7 @@ void DialogMenu::keyUpEvent(KeyEvent &event) {
 void DialogMenu::saveNetwork(Serialize& out) const {
   auto world=Gothic::inst().world();
   out.write(conversationOwner,conversationId,conversationRevision,world->objectId(stagedPlayer));
+  out.write(trade.isOpen()==InventoryMenu::State::Trade);
   out.write(isActive(),isChoiceMenuActive(),curentIsPl,
             world->objectId(pl),world->objectId(other),uint32_t(dlgSel),
             current.time>0 ? current.txt : trainingMessage,uint32_t(choice.size()));
@@ -666,9 +681,10 @@ void DialogMenu::saveNetwork(Serialize& out) const {
 
 void DialogMenu::applyNetwork(Serialize& in) {
   if(!Gothic::inst().isGuest()) throw std::runtime_error("Dialogue projection is guest-only");
-  bool active=false, choicesActive=false, speaker=false;
+  bool active=false, choicesActive=false, speaker=false, trading=false;
   uint64_t actor=0, npc=0, owner=0, id=0, revision=0, stage=0;
   in.read(owner,id,revision,stage);
+  in.read(trading);
   uint32_t selection=0, count=0;
   std::string text;
   in.read(active,choicesActive,speaker,actor,npc,selection,text,count);
@@ -689,8 +705,13 @@ void DialogMenu::applyNetwork(Serialize& in) {
   if((active && (owner<1 || owner>2 || !id || !revision ||
       world->npcByObjectId(world->objectRegistry().worldNamespace(),stage)!=world->playerById(owner))) || (!active && owner))
     throw std::runtime_error("Invalid dialogue control lease");
+  if(trading && (!active || choicesActive)) throw std::runtime_error("Invalid trade projection");
   conversationOwner=owner; conversationId=id; conversationRevision=revision;
   stagedPlayer=world->npcByObjectId(world->objectRegistry().worldNamespace(),stage);
+  if(trading) {
+    if(trade.isOpen()!=InventoryMenu::State::Trade || trade.activePlayer()!=stagedPlayer)
+      trade.trade(*stagedPlayer,*otherNpc);
+    } else if(trade.isOpen()==InventoryMenu::State::Trade) trade.close();
   replica=true;
   replicaChoices=choicesActive;
   state=active ? State::Active : State::Idle;
@@ -724,6 +745,8 @@ bool DialogMenu::trainingChoice(const GameScript::DlgChoice& e) const {
 
 bool DialogMenu::guestChoiceAllowed(const GameScript::DlgChoice& e) const {
   if(trainingChoice(e)) return true;
+  const auto tradeSymbol=Gothic::inst().world()->script().findSymbol(e.scriptFn);
+  if(tradeSymbol && tradeSymbol->name()=="DIA_BOSPER_TRADE_INFO") return true;
   if(e.isTrade) return false;
   const auto symbol=Gothic::inst().world()->script().findSymbol(e.scriptFn);
   if(!symbol) return false;
@@ -771,6 +794,8 @@ void DialogMenu::sendRemote(uint8_t action, uint64_t target) {
 void DialogMenu::remoteInput(const Coop::Input& input) {
   if(replica || !isActive() || conversationOwner!=2 || input.dialogueId!=conversationId ||
      input.dialogueRevision!=conversationRevision) return;
+  if(input.dialogueAction>=6) { tradeRequest(input.dialogueAction,input.dialogueTarget); return; }
+  if(trade.isOpen()==InventoryMenu::State::Trade) return;
   if(input.dialogueAction==3) { skipPhrase(); return; }
   if(!isChoiceMenuActive()) return;
   if(input.dialogueAction==4 || input.dialogueAction==5) {
@@ -791,4 +816,39 @@ void DialogMenu::cancelGuest() {
     if(other) other->resetDialogueOutput();
     }
   close();
+  }
+
+void DialogMenu::tradeRequest(uint8_t action, uint64_t target) {
+  if(trade.isOpen()!=InventoryMenu::State::Trade || !isActive()) return;
+  if(replica) { sendRemote(action,target); return; }
+  if(!stagedPlayer || !other || stagedPlayer->isDown() || other->isDown()) return;
+  ++conversationRevision; // Every attempt consumes this displayed transaction revision.
+  if(action==8) { trade.close(); return; }
+  if(action!=6 && action!=7) return;
+  tradeInventoryDirty=true;
+  const size_t count=target>>32;
+  const uint32_t encoded=uint32_t(target);
+  if(!encoded || count==0 || count>10000) return;
+  const size_t item=encoded-1;
+  const bool sell=action==7;
+  auto& source=sell ? stagedPlayer->inventory() : other->inventory();
+  auto it=source.iterator(sell ? Inventory::T_Inventory : Inventory::T_Trade);
+  for(;it.isValid();++it) if(it->clsId()==item) break;
+  if(!it.isValid() || it->isGold() || count>source.itemCount(item)) return;
+  // Iterator rows split an equipped weapon from its spare stack, while transfer
+  // addresses the combined instance. Guest sales may sell spares, but must not
+  // remove the equipped unit and execute its unaudited on_unequip script.
+  if(conversationOwner==2 && it->isEquipped() && count==source.itemCount(item)) return;
+  const int32_t price=sell ? it->sellCost() : it->cost();
+  if(price<0 || uint64_t(price)*count>UINT32_MAX) return;
+  if(sell && stagedPlayer->inventory().goldCount()>UINT32_MAX-uint64_t(price)*count) return;
+  if(sell) stagedPlayer->sellItem(item,*other,count);
+  else stagedPlayer->buyItem(item,*other,count);
+  update();
+  }
+
+bool DialogMenu::takeTradeInventoryUpdate() {
+  const bool ret=tradeInventoryDirty;
+  tradeInventoryDirty=false;
+  return ret;
   }

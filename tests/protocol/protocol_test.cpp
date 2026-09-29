@@ -41,7 +41,7 @@ Message input(uint64_t sequence=9) {
 
 // Independent literal from docs/coop-protocol.md, not constructed by the codec.
 Bytes goldenInput() {
-  return hex("4f4743500000006e000b0003"
+  return hex("4f4743500000006e000c0003"
              "0102030405060708" "0000000000000002"
              "0000000000000009" "0000000000000000"
              "00000081fffb0064" "0000000000000000" "0000000000000000" "000000000000000000" "000000000000000000000000000000000000000000000000000000000000000000");
@@ -109,7 +109,7 @@ void drain(Decoder& decoder, const std::vector<Message>& expected) {
 
 void pickupTransfers() {
   const Message request {4,2,9,0,Input{0,0,0,123,33}};
-  const auto literal = hex("4f4743500000006e000b0003"
+  const auto literal = hex("4f4743500000006e000c0003"
                            "0000000000000004" "0000000000000002"
                            "0000000000000009" "0000000000000000"
                            "0000000000000000" "000000000000007b" "0000000000000021" "000000000000000000" "000000000000000000000000000000000000000000000000000000000000000000");
@@ -153,7 +153,7 @@ void pickupTransfers() {
 
 void weaponEquipment() {
   const Message request {4,2,9,0,Input{0,0,0,0,0,101,1}};
-  const auto literal = hex("4f4743500000006e000b0003"
+  const auto literal = hex("4f4743500000006e000c0003"
                            "0000000000000004" "0000000000000002"
                            "0000000000000009" "0000000000000000"
                            "0000000000000000" "0000000000000000" "0000000000000000"
@@ -273,12 +273,14 @@ void storyProjection() {
   REQUIRE(stream.bufferedBytes()==0);
   }
 
+void tradeBounds();
 void dialogueIntents() {
-  for(uint8_t action=1;action<=5;++action) {
+  tradeBounds();
+  for(uint8_t action=1;action<=8;++action) {
     auto message=input();
     Input request;
     request.dialogueAction=action; request.dialogueWorld=123;
-    request.dialogueTarget=action<=2 ? 456 : 0;
+    request.dialogueTarget=action<=2 ? 456 : ((action==6 || action==7) ? (uint64_t(10000)<<32)|456 : 0);
     request.dialogueId=action==1 ? 0 : 7;
     request.dialogueRevision=action==1 ? 0 : 8;
     message.payload=request;
@@ -292,7 +294,7 @@ void dialogueIntents() {
     for(int fault=0;fault<8;++fault) {
       auto bad=message;
       auto& value=std::get<Input>(bad.payload);
-      if(fault==0) value.dialogueAction=6;
+      if(fault==0) value.dialogueAction=9;
       if(fault==1) value.dialogueWorld=0;
       if(fault==2) value.buttons=Forward;
       if(fault==3) { value.pickupWorld=123; value.pickupItem=1; }
@@ -305,9 +307,17 @@ void dialogueIntents() {
     }
   }
 
+void tradeBounds() {
+  for(uint8_t action:{uint8_t(6),uint8_t(7)}) for(auto target:{uint64_t(1),uint64_t(1)<<32,(uint64_t(10001)<<32)|1}) {
+    auto message=input(); Input v; v.dialogueAction=action; v.dialogueWorld=1;
+    v.dialogueId=1; v.dialogueRevision=1; v.dialogueTarget=target; message.payload=v;
+    error(ProtocolErrorCode::Fields,[&] { encode(message); });
+    }
+  }
+
 void golden() {
   const auto pose = encode({4,2,0,2,samplePoses()});
-  const auto prefix = hex("4f4743500000086a000b000b"
+  const auto prefix = hex("4f4743500000086a000c000b"
                           "0000000000000004" "0000000000000002"
                           "0000000000000000" "0000000000000002"
                           "000000000000007b" "0000000000000064" "0000000000000000"
@@ -383,7 +393,7 @@ void messageTypes() {
     }
   // A second literal covers the variable fingerprints and byte order of a
   // different message type, so matching encode/decode bugs cannot hide it.
-  const auto hello = hex("4f4743500000006c000b0001"
+  const auto hello = hex("4f4743500000006c000c0001"
                          "00000000000000000000000000000000"
                          "00000000000000000000000000000000"
                          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"

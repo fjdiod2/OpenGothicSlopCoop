@@ -352,7 +352,7 @@ void MainWindow::tickNetworkInput(bool apply) {
     networkInstalledInput = message->sequence;
     if(input.dialogueAction) {
       if(input.dialogueWorld==game.world()->objectRegistry().worldNamespace() &&
-         !video.isActive() && !inventory.isActive() && game.world()->currentCs()==nullptr) {
+         !video.isActive() && (!inventory.isActive() || inventory.isOpen()==InventoryMenu::State::Trade) && game.world()->currentCs()==nullptr) {
         if(input.dialogueAction==1 && !dialogs.isActive()) {
           auto stage=game.world()->playerById(2);
           auto npc=game.world()->npcByObjectId(input.dialogueWorld,input.dialogueTarget);
@@ -531,12 +531,14 @@ Coop::Bytes MainWindow::networkStory() {
   dialogs.saveNetwork(out);
   for(uint64_t player=1;player<=2;++player) world->playerById(player)->saveNetworkLearning(out);
   world->script().saveQuests(out);
-  out.write(uint32_t(networkStoryNpc==0 ? 1 : 2));
+  const bool tradeInventory=dialogs.takeTradeInventoryUpdate();
+  out.write(uint32_t(1+(networkStoryNpc!=0)+(tradeInventory ? 1 : 0)));
   const auto inventory=[&](const Npc& npc) {
     out.write(world->objectId(&npc));
     npc.inventory().save(out);
     };
   inventory(*world->playerById(1));
+  if(tradeInventory) inventory(*world->playerById(2));
   if(networkStoryNpc!=0) {
     auto npc=world->npcByObjectId(world->objectRegistry().worldNamespace(),networkStoryNpc);
     if(!npc) throw std::runtime_error("Dialogue actor no longer exists");
@@ -573,7 +575,7 @@ void MainWindow::applyNetworkStory(const Coop::Bytes& bytes) {
   dialogs.applyNetwork(in);
   if(!wasActive && dialogs.isActive()) {
     clearInput();
-    inventory.close();
+    if(inventory.isOpen()!=InventoryMenu::State::Trade) inventory.close();
     }
   for(uint64_t player=1;player<=2;++player) world->playerById(player)->applyNetworkLearning(in);
   world->script().applyNetworkQuests(in);
@@ -585,7 +587,7 @@ void MainWindow::applyNetworkStory(const Coop::Bytes& bytes) {
     uint64_t id=0;
     in.read(id);
     auto npc=world->npcByObjectId(world->objectRegistry().worldNamespace(),id);
-    if(!npc || (npc->isPlayer() && npc!=world->playerById(1)) || !seen.insert(id).second)
+    if(!npc || !seen.insert(id).second)
       throw std::runtime_error("Invalid story inventory actor");
     npc->applyNetworkInventory(in);
     }

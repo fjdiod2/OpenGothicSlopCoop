@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 11 (P01)
+# Co-op wire protocol, version 12 (P02)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -15,6 +15,9 @@ N07 makes the guest a presentation-only process; N08 transfers a host checkpoint
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
 
+Version 12 adds buy/sell/close-trade intents in the existing 110-byte Input, a
+trade-open story flag and the companion inventory in story projections. Version-11
+peers are rejected; checkpoints remain version 56.
 Version 11 adds both players’ combat accuracy and learning counters to the story
 archive. Version-10 peers are rejected; checkpoints remain version 56.
 Version 10 appends dialogue intent to `Input` and a control lease to the story
@@ -66,7 +69,7 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `11` |
+| 8 | 2 | Version | Exactly `12` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
@@ -1087,7 +1090,7 @@ This 110-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 0000006e 000b 0003
+4f474350 0000006e 000c 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
@@ -1179,6 +1182,7 @@ The entry contains, in order:
 
 - In version 10: four u64 values for control owner (0/1/2), conversation ID,
   menu/subtitle revision and staging actor object ID. These use `Serialize` format.
+- In version 12: a serialized boolean indicating an open trade UI.
 - Dialogue active/choices-visible/speaker-is-host flags; host and NPC object IDs;
   selected row; current subtitle; choice count and pairs of title/function symbol.
 - In version 11, host then companion each supply five signed i32 hit chances
@@ -1187,7 +1191,8 @@ The entry contains, in order:
   Replica installation writes actor fields directly without script callbacks.
 - Existing quest-log, known-info and guild-attitude records (`saveQuests`).
 - Inventory actor count, followed by object ID and existing inventory records for
-  the host and the current/most recent dialogue NPC. Previously installed NPC
+  the host, the companion on trade events (version 12), and the current/most recent
+  dialogue NPC. Previously installed NPC
   outcomes remain in the replica; the update does not accumulate past NPC inventories.
 
 Guest installation resolves all identities in the current world and uses saved
@@ -1232,9 +1237,9 @@ outer big-endian format and the same contiguous input sequence as movement.
 
 | Offset | Bytes | Field |
 | --- | --- | --- |
-| 77 | 1 | Dialogue action: 0 none, 1 open, 2 choose, 3 skip, 4 previous, 5 next |
+| 77 | 1 | Dialogue action: 0 none, 1 open, 2 choose, 3 skip, 4 previous, 5 next, 6 buy, 7 sell, 8 close trade |
 | 78 | 8 | World namespace |
-| 86 | 8 | Open: NPC object ID; choose: function symbol index + 1; otherwise zero |
+| 86 | 8 | Open: NPC object ID; choose: function symbol index + 1; trade: packed quantity/item (below); otherwise zero |
 | 94 | 8 | Conversation ID (zero for open) |
 | 102 | 8 | Menu/subtitle revision (zero for open) |
 
@@ -1319,5 +1324,56 @@ Input fields or general reward-popup replication.
 A learning update changes the story archive comparison, transmitting the nine
 combat-learning fields per actor together with the menu state. Attribute/LP/talent
 and attribute-learning counters retain their existing progression/personal paths.
-Trading stays blocked for guests until P02. Other trainers and crafting globals
+Trading is enabled for the audited P02 route below. Other trainers and crafting globals
 are not enabled by this limited route policy.
+
+
+## Personal vendor transactions (P02)
+
+The audited guest route is Bosper's `DIA_BOSPER_TRADE_INFO`. Its condition,
+known-info state and original stock callback execute with canonical host story
+bindings. The open trade belongs to the conversation owner, and both views show
+that actor's inventory plus the same vendor stock. Only the owner can operate
+or close it. Ordinary host vendor routes continue using their original scripts.
+No guest VM runs stock, item-constructor, payment or dialogue callbacks.
+
+Actions 6 (buy) and 7 (sell) use the existing target u64 at offset 86:
+upper 32 bits are requested quantity (1–10,000); lower 32 bits are item instance
+index + 1 (nonzero). Action 8 closes the trade and requires target zero.
+All require the current world, conversation ID and displayed transaction revision.
+There are no client-supplied prices or balances. Wire validation rejects invalid
+quantities/encodings, mixed movement/use commands and missing leases. The host
+requires guest conversation ownership and an open trade, resolves its recorded
+vendor and player, then validates the source item, visible stock, available count,
+nonnegative original price and bounded arithmetic. Gold cannot itself be traded.
+Source-count validation uses the combined equipped/spare stack, since UI rows
+can split one instance. Guest sales must leave any equipped unit in place; spare
+units can be sold, but scripted equipment removal is not enabled through this route. An equipped vendor item is never purchasable.
+
+Existing `buyItem`/`sellItem` perform the transfer. Buying costs the original item
+value; a bulk request exceeding funds buys only the affordable count, while zero
+affordability transfers nothing. Selling pays `ceil(value * TRADE_VALUE_MULTIPLIER)`;
+the installed NotR multiplier is 0.15. Preserve original unlimited vendor funds:
+sales create the player's proceeds and purchases remove payment, without moving
+gold into/out of the vendor purse. Requests above available source quantity are
+rejected before either items or money change. Every valid-lease attempt advances
+the transaction revision, including refused attempts and closing. Replayed input
+sequences and fresh inputs with an old revision cannot purchase/sell again.
+
+On trade opening/transaction attempts the existing ordered story archive carries
+both players' full inventories and the current/last dialogue NPC inventory.
+The companion replacement is queued through closing until projected once; ordinary
+pickups/consumables retain their existing incremental paths without replacing the
+companion inventory or invalidating unrelated item references. Stock and balances are projected
+together, after the existing pickup/equipment/personal validation. This archive
+is still tied to the exact executable/data handshake and its existing size caps;
+it is not an untrusted arbitrary-save API. No inventory scripts run on the guest.
+Inventory cursors remain local; identity/quantity intents refer to items, not rows.
+
+The dialogue lease remains active throughout trade. Save requests wait for exit;
+disconnect closes a guest-owned shop and clears dialogue/output state. World load
+cancels the lease; fresh session generations reject prior traffic. Original NPC
+and actor archives persist stock, gold, items and chapter stock flags, so no save
+schema migration is needed. Bosper's original per-visit arrow/bolt refresh and
+chapter-based stock/junk cleanup remain shared host effects. Persistence tests
+compare saved inventories before reopening, then test another real transaction.

@@ -132,6 +132,9 @@ void InventoryMenu::open(Npc &pl) {
 void InventoryMenu::trade(Npc &pl, Npc &tr) {
   if(pl.isDown())
     return;
+  takeTimer.stop();
+  takeCount=0;
+  pageLocal[0]={}; pageLocal[1]={};
   state  = State::Trade;
   player = &pl;
   trader = &tr;
@@ -298,6 +301,7 @@ void InventoryMenu::moveDown() {
   }
 
 void InventoryMenu::keyDownEvent(KeyEvent &e) {
+  if(state==State::Trade && tradeInputAllowed && !tradeInputAllowed()) { e.accept(); return; }
   if(state==State::Closed || state==State::LockPicking){
     e.ignore();
     return;
@@ -320,7 +324,7 @@ void InventoryMenu::keyDownEvent(KeyEvent &e) {
     onItemAction(slot);
     }
   else if(e.key==KeyEvent::K_ESCAPE || keycodec.tr(e)==KeyCodec::Inventory){
-    close();
+    if(state==State::Trade && onTradeClose) onTradeClose(); else close();
     }
   else if(e.key==KeyEvent::K_Space) {
     lootMode = LootMode::Normal;
@@ -343,6 +347,7 @@ void InventoryMenu::keyDownEvent(KeyEvent &e) {
   }
 
 void InventoryMenu::keyRepeatEvent(KeyEvent& e) {
+  if(state==State::Trade && tradeInputAllowed && !tradeInputAllowed()) { e.accept(); return; }
   if(state==State::LockPicking || state==State::Closed)
     return;
   processMove(e);
@@ -356,6 +361,7 @@ void InventoryMenu::keyUpEvent(KeyEvent&) {
   }
 
 void InventoryMenu::mouseDownEvent(MouseEvent &e) {
+  if(state==State::Trade && tradeInputAllowed && !tradeInputAllowed()) { e.accept(); return; }
   if(player==nullptr || state==State::Closed) {
     e.ignore();
     return;
@@ -366,8 +372,9 @@ void InventoryMenu::mouseDownEvent(MouseEvent &e) {
 
   if (e.button==MouseEvent::ButtonLeft)
     onItemAction(Item::NSLOT);
-  else if (e.button==MouseEvent::ButtonRight)
-    close();
+  else if (e.button==MouseEvent::ButtonRight) {
+    if(state==State::Trade && onTradeClose) onTradeClose(); else close();
+    }
 
   adjustScroll();
   }
@@ -378,6 +385,7 @@ void InventoryMenu::mouseUpEvent(MouseEvent&) {
   }
 
 void InventoryMenu::mouseWheelEvent(MouseEvent &e) {
+  if(state==State::Trade && tradeInputAllowed && !tradeInputAllowed()) { e.accept(); return; }
   if(state==State::Closed) {
     e.ignore();
     return;
@@ -462,7 +470,7 @@ void InventoryMenu::onItemAction(uint8_t slotHint) {
   if(!it.isValid())
     return;
 
-  if(Gothic::inst().isGuest()) {
+  if(Gothic::inst().isGuest() && state!=State::Trade) {
     if(state==State::Equip && slotHint==Item::NSLOT && it->isEquipmentWeapon() && onEquipmentRequest)
       onEquipmentRequest(it->clsId(),!it.isEquipped());
     else if(state==State::Equip && slotHint==Item::NSLOT && onConsumableRequest &&
@@ -502,7 +510,8 @@ bool InventoryMenu::selectedItemEquipped() {
   }
 
 void InventoryMenu::onTakeStuff() { 
-  if(Gothic::inst().isGuest()) return;
+  if(Gothic::inst().isGuest() && state!=State::Trade) return;
+  if(state==State::Trade && tradeInputAllowed && !tradeInputAllowed()) return;
   size_t itemCount = 0;
   auto& page = activePage();
   auto& sel  = activePageSel();
@@ -539,6 +548,10 @@ void InventoryMenu::onTakeStuff() {
       }
     }
   else if(state==State::Trade) {
+    if(onTradeRequest) {
+      onTradeRequest(page.is(&player->inventory()),it->clsId(),std::min<size_t>(itemCount,10000));
+      adjustScroll(); update(); return;
+      }
     if(page.is(&player->inventory())) {
       player->sellItem(it->clsId(),*trader,itemCount);
       } else {

@@ -449,6 +449,7 @@ void MainWindow::keyDownEvent(KeyEvent &event) {
       event.accept();
       }
     else if(Gothic::inst().isCoopFailed()) return;
+    else if(inventory.isOpen()==InventoryMenu::State::Trade) inventory.keyDownEvent(event);
     else if(dialogs.isActive()) dialogs.keyDownEvent(event);
     else if(inventory.isActive()) inventory.keyDownEvent(event);
     else if(keycodec.tr(event)==KeyCodec::Inventory && Gothic::inst().localPlayer() &&
@@ -531,6 +532,7 @@ void MainWindow::keyDownEvent(KeyEvent &event) {
   }
 
 void MainWindow::keyRepeatEvent(KeyEvent& event) {
+  if(inventory.isOpen()==InventoryMenu::State::Trade) { inventory.keyRepeatEvent(event); return; }
   if(Gothic::inst().isCoopFailed() && uiKeyUp!=&rootMenu) return;
   if(uiKeyUp==&video){
     if(event.isAccepted())
@@ -561,7 +563,10 @@ void MainWindow::keyRepeatEvent(KeyEvent& event) {
   }
 
 void MainWindow::keyUpEvent(KeyEvent &event) {
-  if(Gothic::inst().isGuest()) { networkKey(event,false); return; }
+  if(Gothic::inst().isGuest()) {
+    if(inventory.isActive()) inventory.keyUpEvent(event);
+    networkKey(event,false); return;
+    }
   if(Gothic::inst().isCoopFailed() && !rootMenu.isActive()) {
     if(keycodec.tr(event)==KeyCodec::Escape) rootMenu.setMainMenu();
     event.accept();

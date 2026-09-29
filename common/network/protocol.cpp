@@ -159,13 +159,15 @@ void validatePayload(const Message& message) {
     }
   if(auto input = std::get_if<Input>(&message.payload)) {
     const bool hasDialog = input->dialogueAction!=0;
-    if(input->dialogueAction>5 ||
+    const bool transaction = input->dialogueAction==6 || input->dialogueAction==7;
+    if(input->dialogueAction>8 ||
        (!hasDialog && (input->dialogueWorld || input->dialogueTarget || input->dialogueId || input->dialogueRevision)) ||
        (hasDialog && (!input->dialogueWorld || input->buttons || input->lookX || input->lookY || input->pickupItem || input->equipmentItem)) ||
        (input->dialogueAction==1 && (!input->dialogueTarget || input->dialogueId || input->dialogueRevision)) ||
        (input->dialogueAction>1 && (!input->dialogueId || !input->dialogueRevision)) ||
        (input->dialogueAction==2 && (!input->dialogueTarget || input->dialogueTarget>uint64_t(UINT32_MAX)+1)) ||
-       (input->dialogueAction>2 && input->dialogueTarget))
+       (transaction && (!uint32_t(input->dialogueTarget) || !(input->dialogueTarget>>32) || (input->dialogueTarget>>32)>10000)) ||
+       (input->dialogueAction>2 && !transaction && input->dialogueTarget))
       invalid(ProtocolErrorCode::Fields,"Invalid dialogue intent");
 
     if(input->equipmentAction>3 || (input->equipmentItem==0)!=(input->equipmentAction==0) ||
