@@ -19,6 +19,7 @@
 #endif
 
 #include "utils/crashlog.h"
+#include "utils/testwindow.h"
 #include "mainwindow.h"
 #include "gothic.h"
 #include "build.h"
@@ -128,6 +129,12 @@ int main(int argc,const char** argv) {
   Workers::setThreadName("Main thread");
 
   CommandLine          cmd{argc,argv};
+#if defined(__OSX__)
+  if(!cmd.testControlPath().empty()) {
+    TestWindow::observe();
+    Tempest::SystemApi::setBackgroundMode(cmd.isTestBackground());
+    }
+#endif
   auto                 api     = mkApi(cmd);
   const auto           gpuName = selectDevice(*api);
   CrashLog::setGpu(gpuName);

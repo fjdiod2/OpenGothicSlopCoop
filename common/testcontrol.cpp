@@ -8,6 +8,7 @@
 #include "game/gamesession.h"
 #include "world/triggers/abstracttrigger.h"
 #include "game/serialize.h"
+#include "utils/testwindow.h"
 
 #include <Tempest/Application>
 #include <Tempest/Log>
@@ -69,6 +70,17 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("authority"); str(game.isGuest() ? "guest" : "campaign");
   out.Key("waiting_snapshot"); out.Bool(game.isGuest() && idle && !world && loadStatus!="failed");
   out.Key("rendered_frames"); out.Uint64(renderedFrames);
+#if defined(__OSX__)
+  const auto window = TestWindow::state();
+  out.Key("native_window"); out.StartObject();
+  out.Key("background"); out.Bool(CommandLine::inst().isTestBackground());
+  out.Key("active"); out.Bool(window.active);
+  out.Key("key_window"); out.Bool(window.keyWindow);
+  out.Key("activations"); out.Uint64(window.activations);
+  out.Key("key_events"); out.Uint64(window.keyEvents);
+  out.Key("frontmost_pid"); out.Int(window.frontmostPid);
+  out.EndObject();
+#endif
   out.Key("simulation_held"); out.Bool(runtimeMode==R_Suspended);
   out.Key("save_status"); str(saveStatus);
   const auto boundary = [&](const std::optional<CheckpointBoundary>& value) {
@@ -614,6 +626,25 @@ void MainWindow::pollTestControl() {
       if(!actor->setPosition(pos)) throw std::runtime_error("Cannot position combat fixture player");
       actor->setDirection(target->position()-pos);
       }
+    else if(action=="fixture_monster_target") {
+      auto world = game.world();
+      if(!world->isAuthoritative()) throw std::runtime_error("Guest cannot retarget monster fixture");
+      if(!cmd.HasMember("namespace") || !cmd["namespace"].IsUint64() ||
+         !cmd.HasMember("object_id") || !cmd["object_id"].IsUint64())
+        throw std::runtime_error("Expected monster identity");
+      auto monster = world->npcByObjectId(cmd["namespace"].GetUint64(),cmd["object_id"].GetUint64());
+      auto actor = world->playerById(testInputPlayer);
+      if(!monster || monster->isDown() || actor->isDown() ||
+         monster->instanceSymbol()!=world->script().findSymbolIndex("SCAVENGER"))
+        throw std::runtime_error("Expected a living scavenger and standing player");
+      const auto attack = world->script().findSymbolIndex("ZS_MM_ATTACK");
+      if(attack==size_t(-1)) throw std::runtime_error("Missing original monster attack state");
+      monster->clearState(true);
+      monster->clearAiQueue();
+      monster->setTarget(actor);
+      monster->setOther(actor);
+      monster->startState(ScriptFn(attack),"");
+      }
     else if(action=="fixture_monster") {
       auto world = game.world();
       if(!world->isAuthoritative()) throw std::runtime_error("Guest cannot create monster fixture");
@@ -629,6 +660,12 @@ void MainWindow::pollTestControl() {
         if(!cmd["hp"].IsInt() || cmd["hp"].GetInt()<1 || cmd["hp"].GetInt()>70)
           throw std::runtime_error("Expected monster starting HP in 1..70");
         hp = cmd["hp"].GetInt();
+        }
+      int level = -1;
+      if(cmd.HasMember("level")) {
+        if(!cmd["level"].IsInt() || cmd["level"].GetInt()<1 || cmd["level"].GetInt()>100)
+          throw std::runtime_error("Expected monster fixture level in 1..100");
+        level = cmd["level"].GetInt();
         }
       float distance = 150.f;
       if(cmd.HasMember("distance")) {
@@ -651,6 +688,9 @@ void MainWindow::pollTestControl() {
       pos.y = ground.v.y;
       auto monster = world->addNpc(cls,pos);
       if(!monster) throw std::runtime_error("Cannot create monster fixture");
+      // Original ZS_DEAD derives its XP award from level. Raising this fixture
+      // field tests real level-up with fewer kills; never assign player XP.
+      if(level>0) monster->handle().level = level;
       monster->changeAttribute(ATR_HITPOINTS,std::min(hp,monster->attribute(ATR_HITPOINTSMAX))-
                               monster->attribute(ATR_HITPOINTS),false);
       monster->setDirection(actor->position()-pos);

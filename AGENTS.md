@@ -18,6 +18,8 @@
 - Keep game assets, saves, logs, build products and generated `game/build.h`
   out of Git. Autonomous GUI tests use isolated runtimes, small windows, a
   30-FPS target and 50% render scale; stop their owned processes when finished.
+- Automated macOS runs use `-test-background` to preserve the user's app and
+  keyboard focus. Foreground mode is for explicitly requested interactive tests.
 - Run tests silently, including effects, dialogue, videos and music. The parent
   repository's runner and test launcher apply `tools/prepare-gothic-test.py` to
   each isolated runtime before launch. Enable audio only for a user-requested

@@ -50,6 +50,7 @@ class CommandLine {
     bool                aaPreset()         const { return aaPresetId;   }
     std::string_view    defaultSave()      const { return saveDef;    }
     std::string_view    testControlPath()  const { return testControl; }
+    bool                isTestBackground() const { return testBackground; }
     Coop::Endpoint      coopEndpoint()     const { return coop; }
 
     std::string         wrldDef;
@@ -63,6 +64,7 @@ class CommandLine {
     std::u16string      gcutscene;
     std::string         saveDef;
     std::string         testControl;
+    bool                testBackground = false;
     Coop::Endpoint      coop;
     bool                devmode      = false;
     bool                noMenu       = false;

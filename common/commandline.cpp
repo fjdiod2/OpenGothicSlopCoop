@@ -68,6 +68,9 @@ CommandLine::CommandLine(int argc, const char** argv) {
       // http://www.gothic-library.ru/publ/marvin/1-1-0-547
       devmode = true;
       }
+    else if(arg=="-test-background") {
+      testBackground = true;
+      }
     else if(arg=="-test-control") {
       if(++i>=argc)
         throw std::invalid_argument("-test-control requires a directory");
@@ -175,6 +178,8 @@ CommandLine::CommandLine(int argc, const char** argv) {
 
   if(!testControl.empty() && !devmode)
     throw std::invalid_argument("-test-control requires -devmode");
+  if(testBackground && (testControl.empty() || !isWindow))
+    throw std::invalid_argument("-test-background requires -test-control and -window");
 
   if(gpath.empty()) {
     InstallDetect inst;
