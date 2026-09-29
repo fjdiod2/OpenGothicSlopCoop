@@ -18,6 +18,7 @@
 #include "worldsound.h"
 #include "waypoint.h"
 #include "waymatrix.h"
+#include "network/protocol.h"
 
 class GameSession;
 class Focus;
@@ -53,6 +54,11 @@ class World final {
     Item* itemByObjectId(uint64_t space, uint64_t id) const {
       return static_cast<Item*>(objectRegistry().resolve(space,id,Coop::ObjectKind::Item));
       }
+    void                 trackNetworkPickups(bool enabled);
+    void                 recordNetworkPickup(const Coop::Pickup& pickup);
+    bool                 hasNetworkPickups() const { return pickupOverflow || !pendingPickups.empty(); }
+    std::vector<Coop::Pickup> takeNetworkPickups();
+    bool                 applyNetworkPickups(const std::vector<Coop::Pickup>& pickups);
     void                 postInit();
     std::string_view     name() const { return wname; }
 
@@ -235,6 +241,8 @@ class World final {
     std::unique_ptr<GlobalEffects>        globFx;
     WorldSound                            wsound;
     WorldObjects                          wobj;
+    bool                                  trackingPickups = false, pickupOverflow = false;
+    std::vector<Coop::Pickup>              pendingPickups;
     std::unique_ptr<Npc>                  lvlInspector;
 
     auto         roomAt(const zenkit::BspNode &node) -> std::string_view;

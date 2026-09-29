@@ -41,10 +41,10 @@ Message input(uint64_t sequence=9) {
 
 // Independent literal from docs/coop-protocol.md, not constructed by the codec.
 Bytes goldenInput() {
-  return hex("4f4743500000003400040003"
+  return hex("4f4743500000004400050003"
              "0102030405060708" "0000000000000002"
              "0000000000000009" "0000000000000000"
-             "00000081fffb0064");
+             "00000081fffb0064" "0000000000000000" "0000000000000000");
   }
 
 Poses samplePoses() {
@@ -106,18 +106,62 @@ void drain(Decoder& decoder, const std::vector<Message>& expected) {
   REQUIRE(decoder.queuedMessages()==0);
   }
 
+void pickupTransfers() {
+  const Message request {4,2,9,0,Input{0,0,0,123,33}};
+  const auto literal = hex("4f4743500000004400050003"
+                           "0000000000000004" "0000000000000002"
+                           "0000000000000009" "0000000000000000"
+                           "0000000000000000" "000000000000007b" "0000000000000021");
+  REQUIRE(encode(request)==literal);
+  auto poses = samplePoses();
+  poses.pickups.push_back({2,12,33,100,1,2,3});
+  Message transfer {4,2,0,2,poses};
+  for(const auto& message:{request,transfer}) {
+    const auto bytes = encode(message);
+    for(size_t split=0; split<=bytes.size(); ++split) {
+      Decoder decoder;
+      decoder.feed(std::span(bytes).first(split));
+      decoder.feed(std::span(bytes).subspan(split));
+      decoder.finish();
+      drain(decoder,{message});
+      }
+    }
+  auto bad = request;
+  std::get<Input>(bad.payload).pickupWorld = 0;
+  error(ProtocolErrorCode::Fields,[&] { encode(bad); });
+  auto half = literal;
+  std::fill(half.begin()+52,half.begin()+60,0);
+  Decoder decoder;
+  error(ProtocolErrorCode::Fields,[&] { decoder.feed(half); });
+  for(int fault=0; fault<6; ++fault) {
+    auto invalid = poses;
+    auto& p = invalid.pickups[0];
+    if(fault==0) p.player=3;
+    if(fault==1) p.actor=11;
+    if(fault==2) p.after=4;
+    if(fault==3) { p.before=UINT32_MAX; p.after=p.before+1; }
+    if(fault==4) invalid.pickups.push_back(p);
+    if(fault==5) invalid.pickups.resize(MaxPickups+1,p);
+    error(ProtocolErrorCode::Fields,[&] { encode({4,2,0,2,invalid}); });
+    }
+  auto wrongCount = encode(transfer);
+  wrongCount[1527] = 2; // Only one transfer is present.
+  Decoder count;
+  error(ProtocolErrorCode::Size,[&] { count.feed(wrongCount); });
+  }
+
 void golden() {
   const auto pose = encode({4,2,0,2,samplePoses()});
-  const auto prefix = hex("4f474350000005f60004000b"
+  const auto prefix = hex("4f474350000005f80005000b"
                           "0000000000000004" "0000000000000002"
                           "0000000000000000" "0000000000000002"
                           "000000000000007b" "0000000000000064" "0000000000000000"
                           "0000000000000001" "000000000000000b"
                           "3fa00000c02000004040000042b40000"
                           "00000000000000000000000000000000" "01535f52554e");
-  REQUIRE(pose.size()==1526 && std::equal(prefix.begin(),prefix.end(),pose.begin()));
+  REQUIRE(pose.size()==1528 && std::equal(prefix.begin(),prefix.end(),pose.begin()));
   const auto bytes = goldenInput();
-  REQUIRE(bytes.size()==52);
+  REQUIRE(bytes.size()==68);
   REQUIRE(encode(input())==bytes);
   Decoder decoder;
   decoder.feed(bytes);
@@ -137,7 +181,7 @@ void messageTypes() {
     }
   // A second literal covers the variable fingerprints and byte order of a
   // different message type, so matching encode/decode bugs cannot hide it.
-  const auto hello = hex("4f4743500000006c00040001"
+  const auto hello = hex("4f4743500000006c00050001"
                          "00000000000000000000000000000000"
                          "00000000000000000000000000000000"
                          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -389,19 +433,19 @@ void writeLimits() {
   REQUIRE(queue.enqueue(input()));
   REQUIRE(queue.enqueue(input(10)));
   REQUIRE(!queue.enqueue(input(11)));
-  REQUIRE(queue.pendingBytes()==104 && queue.retainedBytes()==104);
-  queue.consume(51);
-  REQUIRE(queue.pendingBytes()==53 && queue.retainedBytes()==104);
+  REQUIRE(queue.pendingBytes()==136 && queue.retainedBytes()==136);
+  queue.consume(67);
+  REQUIRE(queue.pendingBytes()==69 && queue.retainedBytes()==136);
   REQUIRE(!queue.enqueue(input(11))); // A partial frame still occupies storage.
   queue.consume(1);
-  REQUIRE(queue.pendingBytes()==52 && queue.retainedBytes()==52);
+  REQUIRE(queue.pendingBytes()==68 && queue.retainedBytes()==68);
   REQUIRE(queue.enqueue(input(11)));
-  error(ProtocolErrorCode::WriteCount,[&] { queue.consume(53); });
-  REQUIRE(queue.pendingBytes()==104 && queue.queuedMessages()==2);
+  error(ProtocolErrorCode::WriteCount,[&] { queue.consume(69); });
+  REQUIRE(queue.pendingBytes()==136 && queue.queuedMessages()==2);
   auto invalid = input();
   invalid.sequence = 0;
   error(ProtocolErrorCode::Fields,[&] { queue.enqueue(invalid); });
-  REQUIRE(queue.pendingBytes()==104 && queue.queuedMessages()==2);
+  REQUIRE(queue.pendingBytes()==136 && queue.queuedMessages()==2);
   WriteQueue count({MaxQueueBytes,1});
   REQUIRE(count.enqueue(input()));
   REQUIRE(!count.enqueue(input(10)));
@@ -524,7 +568,7 @@ void malformedStress() {
 
 int main(int argc, char** argv) {
   const std::vector<std::pair<std::string,std::function<void()>>> cases = {
-    {"golden",golden},{"message-types",messageTypes},{"fragments",fragments},
+    {"golden",golden},{"pickup-transfers",pickupTransfers},{"message-types",messageTypes},{"fragments",fragments},
     {"combined",combined},{"malformed-header",malformedHeader},{"malformed-payload",malformedPayload},
     {"encode-validation",encodeValidation},{"eof",eof},{"receive-limits",receiveLimits},
     {"write-limits",writeLimits},{"partial-writes",partialWrites},

@@ -143,6 +143,7 @@ GameSession::GameSession(Serialize &fin, Authority authority) : authority(author
   cam.reset(new Camera());
   vm.reset(new GameScript(*this));
   vm->initDialogs();
+  vm->loadFocus(fin);
 
   if(true) {
     setWorld(std::unique_ptr<World>(new World(*this,wname,false,[&](int v){
@@ -244,6 +245,7 @@ void GameSession::save(Serialize &fout, std::string_view name, const Pixmap& scr
 
   fout.setEntry("game/daedalus");
   vm->saveVar(fout);
+  vm->saveFocus(fout);
   Gothic::inst().setLoadingProgress(80);
   }
 

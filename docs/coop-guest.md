@@ -1,9 +1,9 @@
-# Guest authority (N07–N12)
+# Guest authority (N07–G01)
 
 The campaign is simulated and saved by the host. `-coop-join 127.0.0.1:PORT`
 selects guest mode for the process, including before a world exists and after
 connection refusal, timeout or disconnect. The guest does not become a host if
-its connection fails. N10 uses wire version 4 and checkpoint version 56.
+its connection fails. G01 uses wire version 5 and checkpoint version 56.
 
 ## Loading
 
@@ -18,8 +18,8 @@ loading must not depend on `Gothic::world()` because the new session is owned by
 the background loader at that point. NPC/item records are allocated and restored
 from the checkpoint without running their instance constructors. Campaign
 definition constructors (spells, focus, currency, guild values and dialogue
-instances), SVM constructors and DirectMemory initialization are skipped. The
-guest uses empty definition defaults where a read-only query requires a value.
+instances), SVM constructors and DirectMemory initialization are skipped. The guest restores read-only focus definitions from `coop/focus`; other skipped
+definitions retain empty defaults.
 The separate visual/resource VMs still load rendering, camera and sound data.
 
 Saved variables, quests, perceptions, NPCs, inventories, world items, triggers
@@ -47,7 +47,8 @@ effect ticks. Gameplay animation events and root-motion integration remain in
 the authoritative NPC tick.
 
 The main window keeps rendering and camera mouse/zoom handling active. It skips
-dialogue, inventory and player simulation. Explicit nonlocal
+dialogue and player simulation. G01 permits read-only inventory navigation,
+with item-use, drop and equipment actions blocked. Explicit nonlocal
 controllers, Marvin commands and mutating UI shortcuts are blocked. N09 routes
 normal movement/turning keys and mouse intent to the assigned host controller
 after snapshot readiness; guest input never drives local gameplay. N10 receives
@@ -125,3 +126,15 @@ are excluded because they contain replicated transforms. Campaign tick/function
 counts stay fixed. A fixture host then sends unknown world/object/animation
 references after a real snapshot; the guest must reject them before changing
 either actor. This supplements the N07 effect-attempt and save-denial regression.
+
+## World-item pickup (G01)
+
+The guest's generic-action key sends the focused typed world-item identity to
+the host. Host normal targeting and pickup checks decide the outcome. Successful
+host or companion pickups are journaled into ordered pose frames. The guest
+validates the whole frame and all transfer preconditions before moving the
+existing snapshot item into the specified inventory and tombstoning its world
+identity. This explicit replica path calls no campaign scripts or pickup effects.
+The normal mutating guest APIs remain blocked. Tab shows companion inventory;
+use/equip/drop is unavailable. Save/restart/rejoin gets the result from the host's
+checkpoint. See [wire format and validation](coop-protocol.md#pickup-transfers-g01).

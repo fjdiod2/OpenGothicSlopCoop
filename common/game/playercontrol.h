@@ -38,6 +38,7 @@ class PlayerControl final {
     bool  interact(Interactive& it);
     bool  interact(Npc&         other);
     bool  interact(Item&        item);
+    bool  pickupObject(uint64_t world, uint64_t item);
 
     void  clearInput();
 

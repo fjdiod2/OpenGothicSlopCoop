@@ -108,6 +108,8 @@ class GameScript final {
     const zenkit::IFocus&       focusMelee() const { return cFocusMelee; }
     const zenkit::IFocus&       focusRange() const { return cFocusRange; }
     const zenkit::IFocus&       focusMage()  const { return cFocusMage;  }
+    void                       saveFocus(Serialize& fout);
+    void                       loadFocus(Serialize& fin);
     const zenkit::IGuildValues& guildVal()   const { return *cGuildVal;  }
 
     std::string_view            menuMain() const;

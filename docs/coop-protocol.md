@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 4 (N10)
+# Co-op wire protocol, version 5 (G01)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -15,11 +15,12 @@ N07 makes the guest a presentation-only process; N08 transfers a host checkpoint
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
 
-Version 4 adds character poses/animation layers and pose acknowledgements.
+Version 5 adds explicit pickup targets to `Input` and ordered pickup transfers
+at the end of `Poses`. Both layouts change; version-4 peers are rejected.
+Version 4 added character poses/animation layers and pose acknowledgements.
 Version 3 added snapshot begin/chunk/end/readiness messages. Older versions are
 rejected explicitly. Version 2 introduced `Accepted`, separating compatibility
-from companion assignment. Existing messages retain their layouts, apart from
-the required version field. The exact executable fingerprint also prevents
+from companion assignment. Other message layouts are unchanged apart from the required version field. The exact executable fingerprint also prevents
 mixing different engine implementations.
 
 N06 adds a persistent, typed world-object registry and checkpoint format, without
@@ -69,7 +70,7 @@ animation-name/unused slots specified below.
 | --- | --- | --- | --- | --- |
 | 1 | `Hello` | Guest → host | 108 | `0 / 0 / 0 / 0` |
 | 2 | `Welcome` | Host → guest | 44 | `nonzero / nonzero / 0 / nonzero` |
-| 3 | `Input` | Guest → host | 52 | `nonzero / nonzero / nonzero / 0` |
+| 3 | `Input` | Guest → host | 68 | `nonzero / nonzero / nonzero / 0` |
 | 4 | `StateAck` | Host → guest | 52 | `nonzero / nonzero / 0 / nonzero` |
 | 5 | `Reject` | Host → guest | 46 | `0 / 0 / 0 / 0` |
 | 6 | `Accepted` | Host → guest | 108 | `nonzero / 0 / 0 / 0` |
@@ -77,7 +78,7 @@ animation-name/unused slots specified below.
 | 8 | `SnapshotChunk` | Host → guest | 53–32,820 | `nonzero / 2 / 0 / nonzero` |
 | 9 | `SnapshotEnd` | Host → guest | 44 | `nonzero / 2 / 0 / nonzero` |
 | 10 | `SnapshotReady` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
-| 11 | `Poses` | Host → guest | 1,526 | `nonzero / 2 / 0 / nonzero` |
+| 11 | `Poses` | Host → guest | 1,528–2,424 | `nonzero / 2 / 0 / nonzero` |
 | 12 | `PoseAck` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
 
 ### Hello
@@ -193,6 +194,8 @@ EOF and cancellation while the application owns a completed snapshot.
 | 44 | 4 | Held-button bit mask |
 | 48 | 2 | Signed relative look X, in input pixels |
 | 50 | 2 | Signed relative look Y, in input pixels |
+| 52 | 8 | Pickup target world namespace, or zero |
+| 60 | 8 | Pickup target typed item ID, or zero |
 
 | Bit | Mask | Action |
 | --- | --- | --- |
@@ -211,8 +214,8 @@ Look deltas are applied once per accepted sequence. This is input intent, not
 position, elapsed simulation time, damage or a script command. The host determines
 simulation timing and gameplay effects. N09 enables bits 0–5 through the guest's
 normal key mappings (including alternate keys). Jump/Walk remain reserved and
-are rejected by the session as `unsupported_input`; interactions, inventory and
-combat need later gameplay tasks. Walk is a toggle in the original controller,
+are rejected by the session as `unsupported_input`. G01 permits item pickup;
+equipment, other interactions and combat need later tasks. Walk is a toggle in the original controller,
 so it must not be incorrectly interpreted as a held modifier.
 
 Each changed held mask sends one sequence; relative mouse packets preserve the
@@ -234,6 +237,18 @@ then queues acknowledgements. Disconnect/world replacement clears queued input;
 controller-held buttons and mouse impulses are released on generation loss.
 Disconnect/save acceptance is covered by the N11–N13 scenarios.
 
+The two pickup fields must both be zero (no request), or both nonzero. Pressing
+the guest's normal generic-action key (Ctrl by default, also Ctrl+Up) sends the
+currently focused item once. Holding it suppresses walking and does not repeat
+pickup requests. The host resolves the supplied typed identity in its current
+world, recomputes normal focus (range, angle, line of sight), and checks normal
+player busy/weapon/body-state conditions. Wrong-world, removed, wrong-kind,
+unknown or out-of-focus targets have no effect. No reward, class, amount or
+recipient is supplied by the guest. The bound companion is always the requester.
+Pickup requests use the same generation, sequence, duplicate rejection and save
+barrier as movement. An input acknowledgement means processed, not successful;
+the corresponding authoritative transfer below is the success result.
+
 ### StateAck
 
 | Offset | Bytes | Field |
@@ -253,8 +268,8 @@ that guest presentation reached a particular pose endpoint.
 ### Poses (N10)
 
 All floats are finite IEEE-754 binary32, transmitted as big-endian bit patterns.
-This fixed 1,526-byte frame contains a 24-byte prefix and two 729-byte actor
-records in player order 1, 2. No native structs, pointers or array indexes cross
+This frame contains a 24-byte prefix, two 729-byte actor records in player order
+1, 2, a u16 pickup count and zero to sixteen 56-byte pickup records. No native structs, pointers or array indexes cross
 the wire. The header's player 2 identifies the recipient binding, not an actor
 index within the payload.
 
@@ -265,6 +280,8 @@ index within the payload.
 | 16 | 8 | Highest applied guest input sequence |
 | 24 | 729 | Host actor record |
 | 753 | 729 | Companion actor record |
+| 1482 | 2 | Pickup transfer count, 0–16 |
+| 1484 | count × 56 | Ordered pickup transfers |
 
 Each actor record is:
 
@@ -290,13 +307,61 @@ NaN, infinity, invalid counts, padding or identities are rejected by the codec.
 
 After readiness, pose revisions start at 2 and increase by exactly one. Host
 capture occurs after its simulation and controller step, at most once per render
-frame, and is skipped when both the tick and applied-input boundary are unchanged.
+frame, and is skipped when the tick and applied-input boundary are unchanged
+and no pickup transfers are pending.
 Guest frames must match generation/binding, arrive in revision order, carry
 nondecreasing host ticks/applied-input sequences and never refer to unsent input.
 There is a separate 64-frame application queue; overflow closes the connection.
 The guest resolves both typed NPC IDs in the received world namespace and validates
-both animations before applying either actor. Invalid world/object/animation
-state closes the connection without partially applying the frame.
+both animations and the complete pickup batch before applying anything. Invalid
+world/object/animation/transfer state closes the connection without partially
+applying the frame.
+
+### Pickup transfers (G01)
+
+Each transfer contains seven u64 fields in order:
+
+| Record offset | Field |
+| --- | --- |
+| 0 | Recipient player role, 1 or 2 |
+| 8 | Recipient typed NPC object ID, matching that frame's actor |
+| 16 | Removed typed world-item ID |
+| 24 | Item instance/class index in the fingerprint-matched game scripts |
+| 32 | Transferred stack count, positive |
+| 40 | Recipient's previous count of that instance |
+| 48 | Recipient's resulting count, previous + transferred |
+
+Instance and inventory counts must fit u32 without overflow. The record's world
+is the enclosing pose namespace. Duplicate item IDs within a batch are invalid.
+Before mutating anything the guest validates all live typed references, item
+class/count/unequipped state and inventory preconditions; sequential transfers
+of the same class use the preceding transfer's resulting count. A valid batch
+moves the snapshot's existing item instances into their recipients' inventories,
+using the normal container merge and world-item tombstone operations. It never
+runs item constructors, pickup animations, scripts, theft perceptions, use or
+equipment effects locally. Normal removal also clears stale VM/AI references to
+the removed world item without executing a script. Host animation arrives through the pose layers.
+Discrete transfers apply once on receipt; transforms retain their interpolation.
+The connection generation, exact pose revision and record index identify the
+transaction. Old/duplicate/out-of-order revisions cannot reapply a transfer.
+
+Host pickup recording is active only with a ready guest. More than 16 transfers
+between frames, outbound queue failure or a guest state mismatch closes the
+connection; a fresh snapshot is the recovery path. Pending transfers are transient
+and are not saved or replayed into a new generation. Saves contain the resulting
+inventories and tombstones, using the existing checkpoint barrier. Checkpoint
+version remains 56. This task supports picking up existing snapshot items;
+item spawning/dropping, use/equip, NPC inventory changes and other campaign
+outcomes require their own replication. Guest Tab opens its own read-only
+inventory for inspection.
+
+Snapshots and new saves include optional `coop/focus` schema 1: a little-endian
+u32 version followed by Normal, Melee, Ranged and Magic targeting definitions.
+Each has 19 four-byte fields in `zenkit::IFocus` declaration order (16 float32
+ranges/angles and three i32 priorities), totaling 308 bytes. Length, schema and
+finite floats are validated. This lets the guest select targets without script
+constructors. Older host checkpoints without the entry remain readable and
+regenerate definitions normally; their fresh network snapshot includes it.
 
 ### PoseAck and presentation
 
@@ -318,9 +383,9 @@ samples bone animation on its presentation clock synchronized to received host
 ticks. Campaign time and all animation gameplay effects stay host-only.
 Each window's existing local camera follows its own actor (host 1, guest 2).
 
-Only these two characters' movement/animation is replicated. NPC AI, combat,
-inventory changes, dialogue, quests and other world changes still require the
-later gameplay tasks. See [guest authority](coop-guest.md) for the immutable
+The two characters' movement/animation and their successful world-item pickups
+are replicated. NPC AI, combat, equipment/use, dialogue, quests and other world
+changes still require later gameplay tasks. See [guest authority](coop-guest.md) for the immutable
 campaign boundary. `Poses` does not imply a full-world revision or a disk commit.
 
 ### Reject
@@ -333,7 +398,7 @@ Reasons: `1` protocol version, `2` engine fingerprint, `3` game-data fingerprint
 `4` host full, `5` invalid session/handshake. Any other value is malformed. No
 arbitrary error string crosses the wire. A reject is a terminal handshake reply,
 followed by closing the connection. On an undecodable/unsupported peer version,
-closing without a reply is also valid; a peer might not understand a version-4
+closing without a reply is also valid; a peer might not understand a version-5
 reject. Runtime connection failure and stale input are handled by the session
 layer, not by sending an unbound reject in the middle of gameplay.
 
@@ -691,14 +756,15 @@ Connections are loopback-only. Internet transport/security is outside N04.
 
 ## Golden example
 
-This 52-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
+This 68-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 00000034 0004 0003
+4f474350 00000044 0005 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
+0000000000000000 0000000000000000
 ```
 
 The test suite checks this literal against both encoding and decoding. It also
@@ -750,3 +816,15 @@ Adding fields, changing their meaning or adding new messages requires a protocol
 version bump (or an explicitly designed negotiation extension in a later version).
 Update this document and the fixed byte vectors with every wire change. Do not
 reinterpret saved player identity as a connection ID or silently relax limits.
+
+## G01 validation
+
+`pickup-transfers` in the asset-free suite covers literal target bytes, every
+fragmentation point, transfer roundtrips, invalid counts, target pairs, actor
+identities, arithmetic overflow and duplicate IDs. The macOS suite now has 38
+cases. Parent runner `guest-pickup` exercises normal keyboard pickup, inventory
+inspection, committed save/restart/fresh rejoin and whole-frame rejection of
+wrong-kind items, inconsistent counts and an invalid second transfer after a
+valid first record. `guest-isolation` verifies only the intended pickup inventory,
+world item/tombstone and pose entries change; scripts/quests/damage stay host-only.
+See parent `TESTING.md` for run artifacts and regression results.

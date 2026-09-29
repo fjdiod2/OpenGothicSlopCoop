@@ -434,6 +434,12 @@ void MainWindow::keyDownEvent(KeyEvent &event) {
       rejoinNetwork();
       event.accept();
       }
+    else if(inventory.isActive()) inventory.keyDownEvent(event);
+    else if(keycodec.tr(event)==KeyCodec::Inventory && Gothic::inst().localPlayer() &&
+            network.status().snapshotState=="ready") {
+      clearInput();
+      inventory.open(*Gothic::inst().localPlayer());
+      }
     else networkKey(event,true);
     return;
     }
@@ -976,6 +982,8 @@ uint64_t MainWindow::tick() {
     }
 
   if(Gothic::inst().isGuest()) {
+    inventory.tick(dt);
+    player.tickFocus();
     tickMouse(dt);
     update();
     return dt;

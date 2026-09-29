@@ -5,6 +5,8 @@
 #include "game/playeridentity.h"
 #include "world/world.h"
 #include "world/objects/npc.h"
+#include "world/objects/item.h"
+#include "world/focus.h"
 #include "game/gamesession.h"
 #include "game/serialize.h"
 #include "utils/mouseutil.h"
@@ -141,6 +143,8 @@ void MainWindow::tickNetwork() {
       }
     }
   auto& game = Gothic::inst();
+  if(game.checkLoading()==Gothic::LoadState::Idle && game.world())
+    game.world()->trackNetworkPickups(status.role==Coop::Role::Host && status.snapshotState=="ready");
   game.setNetworkPaused(status.role==Coop::Role::Host && status.boundPlayer!=0 && status.snapshotState!="ready");
   tickNetworkInput();
   if(status.role==Coop::Role::Guest && !networkLoading && game.checkLoading()==Gothic::LoadState::Idle) {
@@ -205,25 +209,33 @@ void MainWindow::networkKey(Tempest::KeyEvent& event, bool down) {
   if(network.status().snapshotState!="ready" || game.checkLoading()!=Gothic::LoadState::Idle ||
      game.localPlayerId()!=PlayerIdentity::Companion) return;
   const auto action = keycodec.tr(event);
-  if(std::find(std::begin(networkActions),std::end(networkActions),action)==std::end(networkActions)) return;
+  if(action!=KeyCodec::ActionGeneric && std::find(std::begin(networkActions),std::end(networkActions),action)==std::end(networkActions)) return;
+  const bool pressed = down && networkKeys.find(event.key)==networkKeys.end();
   if(down) networkKeys.insert(event.key); else networkKeys.erase(event.key);
   uint32_t buttons = 0;
+  bool interacting = false;
   for(auto key:networkKeys) {
     const Tempest::KeyEvent held(key);
+    interacting |= keycodec.tr(held)==KeyCodec::ActionGeneric;
     for(size_t i=0; i<std::size(networkActions); ++i)
       if(keycodec.tr(held)==networkActions[i]) buttons |= uint32_t(1)<<i;
     }
-  if(buttons!=networkButtons) {
+  if(interacting) buttons = 0; // Action+forward is an interaction, not walking.
+  Item* item = nullptr;
+  if(pressed && action==KeyCodec::ActionGeneric && game.world() && game.localPlayer())
+    item = game.world()->findFocus(*game.localPlayer(),Focus()).item;
+  if(buttons!=networkButtons || item) {
     networkButtons = buttons;
-    sendNetworkInput();
+    sendNetworkInput(0,0,item ? game.world()->objectRegistry().worldNamespace() : 0,
+                         item ? game.world()->objectId(item) : 0);
     }
   event.accept();
   }
 
-void MainWindow::sendNetworkInput(int x, int y) {
+void MainWindow::sendNetworkInput(int x, int y, uint64_t pickupWorld, uint64_t pickupItem) {
   if(network.status().role!=Coop::Role::Guest || network.status().snapshotState!="ready") return;
   const auto clamp = [](int value) { return int16_t(std::clamp(value,-int(Coop::MaxLookDelta),int(Coop::MaxLookDelta))); };
-  if(!network.sendInput({networkButtons,clamp(x),clamp(y)}))
+  if(!network.sendInput({networkButtons,clamp(x),clamp(y),pickupWorld,pickupItem}))
     network.invalidate("input_queue_full");
   }
 
@@ -241,6 +253,7 @@ void MainWindow::tickNetworkInput(bool apply) {
     networkKeys.clear();
     networkButtons = remoteButtons = 0;
     networkInstalledInput = 0;
+    networkPickupRequests = networkPickupAccepted = 0;
     networkInterpolation.reset();
     if(status.role==Coop::Role::Host && game.world() && game.world()->playerById(PlayerIdentity::Companion))
       controlForPlayer(PlayerIdentity::Companion).clearInput();
@@ -267,6 +280,10 @@ void MainWindow::tickNetworkInput(bool apply) {
     lookX += x;
     lookY += y;
     networkInstalledInput = message->sequence;
+    if(input.pickupItem!=0) {
+      ++networkPickupRequests;
+      if(control.pickupObject(input.pickupWorld,input.pickupItem)) ++networkPickupAccepted;
+      }
     }
   // Bound the accumulated impulse per frame, including a burst of packets.
   // The sender never supplies elapsed simulation time.
@@ -280,7 +297,8 @@ void MainWindow::updateNetworkPoses() {
   if(game.checkLoading()!=Gothic::LoadState::Idle || !world || status.snapshotState!="ready") return;
   try {
     if(status.role==Coop::Role::Host) {
-      if(status.posesSent!=0 && status.poseTick==world->tickCount() && status.inputApplied==networkInstalledInput) return;
+      if(status.posesSent!=0 && status.poseTick==world->tickCount() && status.inputApplied==networkInstalledInput &&
+         !world->hasNetworkPickups()) return;
       const auto revision = std::max(status.snapshotRevision,status.posesSent)+1;
       if(revision==0) throw std::runtime_error("Pose revision exhausted");
       while(status.inputApplied<networkInstalledInput)
@@ -292,6 +310,7 @@ void MainWindow::updateNetworkPoses() {
       poses.appliedInput = status.inputApplied;
       for(size_t i=0; i<poses.actors.size(); ++i)
         poses.actors[i] = world->playerById(i+1)->networkPose();
+      poses.pickups = world->takeNetworkPickups();
       if(!network.sendPoses(status.generation,revision,poses))
         throw std::runtime_error("Cannot queue authoritative poses");
       return;
@@ -317,6 +336,12 @@ void MainWindow::updateNetworkPoses() {
         actors[i] = world->npcByObjectId(poses.world,poses.actors[i].object);
         if(!actors[i] || !actors[i]->validateNetworkPose(poses.actors[i]))
           throw std::runtime_error("Unknown pose identity or animation");
+        }
+      if(!world->applyNetworkPickups(poses.pickups))
+        throw std::runtime_error("Pickup transfer does not match the snapshot state");
+      if(!poses.pickups.empty()) {
+        player.clearFocus();
+        for(auto& entry:otherPlayers) entry.second->clearFocus();
         }
       // Validate both actors before changing either presentation replica.
       const std::array<Coop::ActorPose,2> displayed = {actors[0]->networkPose(),actors[1]->networkPose()};

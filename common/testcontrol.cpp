@@ -115,6 +115,8 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("input_acknowledged"); out.Uint64(net.inputAcknowledged);
   out.Key("input_duplicates"); out.Uint64(net.inputDuplicates);
   out.Key("input_stale"); out.Uint64(net.inputStale);
+  out.Key("pickup_requests"); out.Uint64(networkPickupRequests);
+  out.Key("pickup_accepted"); out.Uint64(networkPickupAccepted);
   out.Key("acknowledged_revision"); out.Uint64(net.acknowledgedRevision);
   out.Key("held_buttons"); out.Uint(networkButtons);
   out.Key("remote_buttons"); out.Uint(remoteButtons);
@@ -185,6 +187,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
     auto itemInfo = [&](const Item& item, size_t count) {
       out.StartObject();
       out.Key("object_id"); out.Uint64(world->objectId(&item));
+      out.Key("instance"); out.Uint64(item.clsId());
       const auto index = world->itmId(&item.handle());
       out.Key("world_index"); out.Int64(index==uint32_t(-1) ? -1 : int64_t(index));
       out.Key("symbol");
@@ -238,6 +241,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       auto actorFocus = world->findFocus(*actor,Focus());
       auto focusedItem = actorFocus.item ? world->script().findSymbol(actorFocus.item->clsId()) : nullptr;
       str(focusedItem ? focusedItem->name() : "");
+      out.Key("focus_item_id"); out.Uint64(actorFocus.item ? world->objectId(actorFocus.item) : 0);
       out.Key("items"); out.StartArray();
       for(auto it=actor->inventory().iterator(Inventory::T_Inventory); it.isValid(); ++it)
         itemInfo(*it,it.count());

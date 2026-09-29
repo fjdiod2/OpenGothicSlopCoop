@@ -16,7 +16,7 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 4;
+inline constexpr uint16_t ProtocolVersion = 5;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
@@ -25,6 +25,8 @@ inline constexpr size_t MaxSnapshotBytes   = 64*1024*1024;
 inline constexpr size_t SnapshotChunkBytes = 32*1024;
 inline constexpr size_t MaxAnimationLayers = 8;
 inline constexpr size_t AnimationNameBytes = 64;
+inline constexpr size_t MaxPickups = 16;
+inline constexpr size_t PickupBytes = 7*8;
 
 enum class MessageType : uint16_t {
   Hello = 1, Welcome = 2, Input = 3, StateAck = 4, Reject = 5, Accepted = 6,
@@ -58,6 +60,7 @@ struct Accepted {
 struct Input {
   uint32_t buttons = 0;
   int16_t  lookX = 0, lookY = 0;
+  uint64_t pickupWorld = 0, pickupItem = 0; // Both zero, or one explicit item request.
   bool operator==(const Input&) const = default;
   };
 struct StateAck {
@@ -97,9 +100,15 @@ struct ActorPose {
   std::vector<AnimationLayer> layers;
   bool operator==(const ActorPose&) const = default;
   };
+struct Pickup {
+  uint64_t player = 0, actor = 0, item = 0, instance = 0;
+  uint64_t amount = 0, before = 0, after = 0;
+  bool operator==(const Pickup&) const = default;
+  };
 struct Poses {
   uint64_t world = 0, tick = 0, appliedInput = 0;
   std::array<ActorPose,2> actors;
+  std::vector<Pickup> pickups; // Ordered, atomic transfers at this revision.
   bool operator==(const Poses&) const = default;
   };
 struct PoseAck { bool operator==(const PoseAck&) const = default; };

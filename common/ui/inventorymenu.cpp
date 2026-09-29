@@ -111,7 +111,7 @@ void InventoryMenu::open(Npc &pl) {
     return;
   if(pl.bodyStateMasked()==BS_UNCONSCIOUS || pl.bodyStateMasked()==BS_LIE)
     return;
-  if(pl.weaponState()!=WeaponState::NoWeapon) {
+  if(!Gothic::inst().isGuest() && pl.weaponState()!=WeaponState::NoWeapon) {
     pl.stopAnim("");
     pl.closeWeapon(false);
     }
@@ -232,7 +232,7 @@ void InventoryMenu::tick(uint64_t /*dt*/) {
 
   if(state==State::Closed) {
     if(player!=nullptr){
-      if(!player->setInteraction(nullptr))
+      if(!Gothic::inst().isGuest() && !player->setInteraction(nullptr))
          return;
       player = nullptr;
       chest  = nullptr;
@@ -455,6 +455,7 @@ InventoryMenu::PageLocal &InventoryMenu::activePageSel() {
   }
   
 void InventoryMenu::onItemAction(uint8_t slotHint) {
+  if(Gothic::inst().isGuest()) return; // Inspect replicated inventory; equipment is G03.
   auto& page = activePage();
   auto& sel  = activePageSel();
 
@@ -481,6 +482,7 @@ void InventoryMenu::onItemAction(uint8_t slotHint) {
   }
 
 void InventoryMenu::onTakeStuff() { 
+  if(Gothic::inst().isGuest()) return;
   size_t itemCount = 0;
   auto& page = activePage();
   auto& sel  = activePageSel();

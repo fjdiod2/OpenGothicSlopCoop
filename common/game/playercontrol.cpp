@@ -295,8 +295,9 @@ void PlayerControl::drawVobRay(DbgPainter& p) const {
   }
 
 void PlayerControl::tickFocus() {
-  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
+  if(Gothic::inst().isNetworkPaused()) return;
   currentFocus = findFocus(&currentFocus);
+  if(Gothic::inst().isGuest()) return; // Read-only focus label for pickup requests.
   setTarget(currentFocus.npc);
 
   if(!ctrl[Action::ActionGeneric])
@@ -397,6 +398,19 @@ bool PlayerControl::interact(Item &item) {
   if(!canInteract())
     return false;
   return pl->takeItem(item)!=nullptr;
+  }
+
+bool PlayerControl::pickupObject(uint64_t space, uint64_t id) {
+  auto world = Gothic::inst().world();
+  if(!world || !world->isAuthoritative() || world->isCutsceneLock() || dlg.isActive() || inv.isActive()) return false;
+  if(!controlledPlayer() || controlledPlayer()->isDown()) return false;
+  auto item = world->itemByObjectId(space,id);
+  // Fresh normal focus enforces distance, facing and line of sight. Never
+  // retarget a stale request to whichever object now occupies that position.
+  if(!item || findFocus(nullptr).item!=item || !interact(*item)) return false;
+  clearInput();
+  clearFocus();
+  return true;
   }
 
 void PlayerControl::moveFocus(FocusAction act) {

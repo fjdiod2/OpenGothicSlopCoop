@@ -753,6 +753,54 @@ std::unique_ptr<Item> World::takeItem(Item &it) {
   return wobj.takeItem(it);
   }
 
+void World::trackNetworkPickups(bool enabled) {
+  trackingPickups = enabled && isAuthoritative();
+  if(!trackingPickups) {
+    pendingPickups.clear();
+    pickupOverflow = false;
+    }
+  }
+
+void World::recordNetworkPickup(const Coop::Pickup& pickup) {
+  if(!trackingPickups || pickup.player==0) return;
+  if(pendingPickups.size()>=Coop::MaxPickups) { pickupOverflow = true; return; }
+  pendingPickups.push_back(pickup);
+  }
+
+std::vector<Coop::Pickup> World::takeNetworkPickups() {
+  if(pickupOverflow) throw std::runtime_error("Pickup replication overflow");
+  auto result = std::move(pendingPickups);
+  pendingPickups.clear();
+  return result;
+  }
+
+bool World::applyNetworkPickups(const std::vector<Coop::Pickup>& pickups) {
+  if(isAuthoritative() || pickups.size()>Coop::MaxPickups) return false;
+  // Validate the complete batch against the pre-state before removing anything.
+  // Use the snapshot's existing item instance: no item constructor, script,
+  // perception, reward, use/equip effect or local pickup animation is executed.
+  std::map<std::pair<uint64_t,uint64_t>,uint64_t> counts;
+  for(size_t i=0; i<pickups.size(); ++i) {
+    const auto& p = pickups[i];
+    auto npc = playerById(p.player);
+    auto item = itemByObjectId(objectRegistry().worldNamespace(),p.item);
+    if(!npc || objectId(npc)!=p.actor || !item || item->clsId()!=p.instance ||
+       item->count()!=p.amount || item->isEquipped() || p.amount==0 ||
+       p.before>UINT32_MAX || p.amount>UINT32_MAX-p.before || p.after!=p.before+p.amount) return false;
+    for(size_t j=0; j<i; ++j)
+      if(pickups[j].item==p.item) return false;
+    const auto key = std::make_pair(p.player,p.instance);
+    const auto [it,inserted] = counts.emplace(key,npc->inventory().itemCount(size_t(p.instance)));
+    if(it->second!=p.before) return false;
+    it->second = p.after;
+    }
+  for(const auto& p:pickups) {
+    auto item = itemByObjectId(objectRegistry().worldNamespace(),p.item);
+    playerById(p.player)->addItem(wobj.takeItem(*item));
+    }
+  return true;
+  }
+
 void World::removeItem(Item& it) {
   if(!isAuthoritative()) return;
   wobj.removeItem(it);

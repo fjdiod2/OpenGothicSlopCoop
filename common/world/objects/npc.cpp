@@ -3447,6 +3447,13 @@ Item* Npc::takeItem(Item& item) {
   if(sq==nullptr)
     return nullptr;
 
+  Coop::Pickup pickup;
+  pickup.player = owner.playerId(this);
+  pickup.actor = owner.objectId(this);
+  pickup.item = owner.objectId(&item);
+  pickup.instance = item.clsId();
+  pickup.amount = item.count();
+  pickup.before = invent.itemCount(item.clsId());
   std::unique_ptr<Item> ptr = owner.takeItem(item);
   if(ptr!=nullptr && ptr->isTorchBurn()) {
    if(!toggleTorch())
@@ -3462,6 +3469,10 @@ Item* Npc::takeItem(Item& item) {
     return nullptr;
 
   it = addItem(std::move(ptr));
+  if(it!=nullptr) {
+    pickup.after = invent.itemCount(size_t(pickup.instance));
+    owner.recordNetworkPickup(pickup);
+    }
   if(isPlayer() && it!=nullptr)
     owner.sendPassivePerc(*this,*this,*it,PERC_ASSESSTHEFT);
 

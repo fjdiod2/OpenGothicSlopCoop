@@ -834,6 +834,34 @@ zenkit::IFocus GameScript::findFocus(std::string_view name) {
     }
   }
 
+void GameScript::saveFocus(Serialize& fout) {
+  fout.setEntry("coop/focus");
+  fout.write(uint32_t(1));
+  for(const auto* f : {&cFocusNorm,&cFocusMelee,&cFocusRange,&cFocusMage})
+    fout.write(f->npc_longrange,f->npc_range1,f->npc_range2,f->npc_azi,f->npc_elevdo,f->npc_elevup,f->npc_prio,
+               f->item_range1,f->item_range2,f->item_azi,f->item_elevdo,f->item_elevup,f->item_prio,
+               f->mob_range1,f->mob_range2,f->mob_azi,f->mob_elevdo,f->mob_elevup,f->mob_prio);
+  }
+
+void GameScript::loadFocus(Serialize& fin) {
+  // Older disk checkpoints are still readable. Every new host snapshot carries
+  // these definitions so targeting requires no guest script constructors.
+  if(!fin.setEntry("coop/focus")) return;
+  if(fin.remainingBytes()!=4+4*19*4) throw std::runtime_error("Invalid focus definitions");
+  uint32_t version = 0;
+  fin.read(version);
+  if(version!=1) throw std::runtime_error("Invalid focus schema");
+  for(auto* f : {&cFocusNorm,&cFocusMelee,&cFocusRange,&cFocusMage}) {
+    fin.read(f->npc_longrange,f->npc_range1,f->npc_range2,f->npc_azi,f->npc_elevdo,f->npc_elevup,f->npc_prio,
+             f->item_range1,f->item_range2,f->item_azi,f->item_elevdo,f->item_elevup,f->item_prio,
+             f->mob_range1,f->mob_range2,f->mob_azi,f->mob_elevdo,f->mob_elevup,f->mob_prio);
+    for(const auto value : {f->npc_longrange,f->npc_range1,f->npc_range2,f->npc_azi,f->npc_elevdo,f->npc_elevup,
+                           f->item_range1,f->item_range2,f->item_azi,f->item_elevdo,f->item_elevup,
+                           f->mob_range1,f->mob_range2,f->mob_azi,f->mob_elevdo,f->mob_elevup})
+      if(!std::isfinite(value)) throw std::runtime_error("Invalid focus value");
+    }
+  }
+
 void GameScript::storeItem(Item *itm) {
   auto* s = vm.global_item();
   if(itm!=nullptr) {
