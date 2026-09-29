@@ -94,6 +94,9 @@ class Npc final {
     Coop::ActorPose networkPose() const;
     bool       validateNetworkPose(const Coop::ActorPose& pose) const;
     void       applyNetworkPose(const Coop::ActorPose& pose);
+    Coop::CombatState networkCombatState() const;
+    bool       validateNetworkCombatState(const Coop::CombatState& state) const;
+    void       applyNetworkCombatState(const Coop::CombatState& state);
     Coop::WeaponEquipment networkEquipment() const { return invent.networkEquipment(); }
     void       applyNetworkEquipment(const Coop::WeaponEquipment& equipment) { invent.applyNetworkEquipment(equipment,*this); }
     std::array<bool,2> networkWeaponViews() const { return visual.weaponViews(); }
@@ -588,6 +591,7 @@ class Npc final {
 
     // last hit
     Npc*                           lastHit          = nullptr;
+    std::optional<uint8_t>         replicaDown;
     char                           lastHitType      = 'A';
     int32_t                        lastHitSpell     = 0;
 

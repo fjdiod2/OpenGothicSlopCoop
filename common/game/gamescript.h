@@ -121,6 +121,8 @@ class GameScript final {
 
     bool                        isAuthoritative() const;
     uint64_t                    functionCalls() const { return scriptFunctionCalls; }
+    uint64_t                    sharedXpEvents() const { return xpEvents; }
+    bool                        isSecondaryXp() const { return secondaryXp; }
     // All campaign function entry points (including triggers/startup) use this
     // gate. The raw VM remains available for allocating/restoring saved records.
     template<class R = zenkit::IgnoreReturnValue, class S, class... P>
@@ -193,6 +195,8 @@ class GameScript final {
 
   private:
     uint64_t scriptFunctionCalls = 0;
+    uint64_t xpEvents = 0;
+    bool secondaryXp = false;
     template<typename T>
     struct DetermineSignature {
       using signature = void();

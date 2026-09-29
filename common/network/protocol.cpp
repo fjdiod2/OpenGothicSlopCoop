@@ -50,7 +50,7 @@ size_t bodySize(MessageType type) {
     case MessageType::SnapshotEnd:
     case MessageType::SnapshotReady:
     case MessageType::PoseAck: return 0;
-    case MessageType::Poses: return 58+2*(49+MaxAnimationLayers*(AnimationNameBytes+21));
+    case MessageType::Poses: return 58+2*ActorPoseBytes+2*CombatStateBytes+2;
     }
   invalid(ProtocolErrorCode::Type,"Unknown co-op message type");
   }
@@ -104,7 +104,7 @@ void validatePayload(const Message& message) {
        poses->actors[0].object==0 || poses->actors[1].object==0 || poses->actors[0].object==poses->actors[1].object)
       invalid(ProtocolErrorCode::Fields,"Invalid pose identities");
     const auto bounded = [](float value, float max) { return std::isfinite(value) && std::abs(value)<=max; };
-    for(auto& actor:poses->actors) {
+    const auto validateActor = [&](const ActorPose& actor) {
       for(float value:actor.position)
         if(!bounded(value,1e7f)) invalid(ProtocolErrorCode::Fields,"Invalid pose position");
       if(!bounded(actor.yaw,1e6f) || !bounded(actor.pitch,90.f) || !bounded(actor.roll,360.f) ||
@@ -117,6 +117,24 @@ void validatePayload(const Message& message) {
         for(char c:layer.name)
           if(c<32 || c>126) invalid(ProtocolErrorCode::Fields,"Invalid animation name");
         }
+      };
+    for(const auto& actor:poses->actors) validateActor(actor);
+    const auto validateCombat = [](const CombatState& state) {
+      if(state.attributes[1]<0 || state.attributes[3]<0 || state.xp<0 || state.next<0 ||
+         state.level<0 || state.lp<0 || state.weapon>6 || state.down>2)
+        invalid(ProtocolErrorCode::Fields,"Invalid combat state");
+      };
+    for(const auto& state:poses->progression) validateCombat(state);
+    if(poses->npcs.size()>MaxCombatNpcs) invalid(ProtocolErrorCode::Fields,"Too many combat NPCs");
+    for(size_t i=0; i<poses->npcs.size(); ++i) {
+      const auto& npc=poses->npcs[i];
+      if(npc.pose.player!=0 || npc.pose.object==0 || npc.pose.object==poses->actors[0].object ||
+         npc.pose.object==poses->actors[1].object)
+        invalid(ProtocolErrorCode::Fields,"Invalid combat NPC identity");
+      for(size_t j=0;j<i;++j)
+        if(poses->npcs[j].pose.object==npc.pose.object) invalid(ProtocolErrorCode::Fields,"Repeated combat NPC");
+      validateActor(npc.pose);
+      validateCombat(npc.state);
       }
     }
   if(auto begin = std::get_if<SnapshotBegin>(&message.payload)) {
@@ -165,9 +183,13 @@ Message readHeader(std::span<const uint8_t> bytes) {
   const auto type = MessageType(get(bytes,10,2));
   const auto length = get(bytes,4,4);
   const auto fixed = HeaderBytes+bodySize(type);
+  bool poseLength = false;
+  for(size_t n=0;n<=MaxCombatNpcs;++n) {
+    const auto base=fixed+n*(ActorPoseBytes+CombatStateBytes);
+    poseLength |= length>=base && length-base<=MaxPickups*PickupBytes && (length-base)%PickupBytes==0;
+    }
   const bool validLength = type==MessageType::SnapshotChunk ? (length>fixed && length<=fixed+SnapshotChunkBytes) :
-                           type==MessageType::Poses ? (length>=fixed && length<=fixed+MaxPickups*PickupBytes &&
-                                                      (length-fixed)%PickupBytes==0) : length==fixed;
+                           type==MessageType::Poses ? poseLength : length==fixed;
   if(!validLength)
     invalid(ProtocolErrorCode::Size,"Co-op payload length does not match message type");
   Message message;
@@ -212,10 +234,13 @@ Message decode(std::span<const uint8_t> bytes) {
     case MessageType::Poses: {
       Poses poses;
       size_t offset = HeaderBytes;
-      const auto integer = [&](size_t width) { auto v = get(bytes,offset,width); offset += width; return v; };
+      const auto integer = [&](size_t width) {
+        if(width>bytes.size()-offset) invalid(ProtocolErrorCode::Size,"Truncated pose field");
+        auto v = get(bytes,offset,width); offset += width; return v;
+        };
       const auto number = [&] { return std::bit_cast<float>(uint32_t(integer(4))); };
       poses.world = integer(8); poses.tick = integer(8); poses.appliedInput = integer(8);
-      for(auto& actor:poses.actors) {
+      const auto readActor = [&](ActorPose& actor) {
         actor.player = integer(8); actor.object = integer(8);
         for(auto& value:actor.position) value = number();
         actor.yaw = number(); actor.pitch = number(); actor.roll = number();
@@ -236,16 +261,33 @@ Message decode(std::span<const uint8_t> bytes) {
           if(i<count) actor.layers.push_back(std::move(layer));
           else if(layer!=AnimationLayer{}) invalid(ProtocolErrorCode::Fields,"Nonzero unused pose layer");
           }
-        }
+        };
+      for(auto& actor:poses.actors) readActor(actor);
+      const auto readCombat = [&](CombatState& state) {
+        const auto signedInt = [&] { return std::bit_cast<int32_t>(uint32_t(integer(4))); };
+        for(auto& value:state.attributes) value=signedInt();
+        state.xp=signedInt(); state.next=signedInt(); state.level=signedInt(); state.lp=signedInt();
+        state.target=integer(8); state.lastHit=integer(8);
+        state.weapon=uint8_t(integer(1)); state.down=uint8_t(integer(1));
+        };
       for(auto& e:poses.equipment) { e.melee=integer(8); e.ranged=integer(8); }
       const auto count = integer(2);
-      if(count>MaxPickups || offset+count*PickupBytes!=bytes.size())
+      if(count>MaxPickups || offset+count*PickupBytes+2*CombatStateBytes+2>bytes.size())
         invalid(ProtocolErrorCode::Size,"Invalid pickup transfer count");
       for(size_t i=0; i<count; ++i) {
         Pickup p;
         p.player=integer(8); p.actor=integer(8); p.item=integer(8); p.instance=integer(8);
         p.amount=integer(8); p.before=integer(8); p.after=integer(8);
         poses.pickups.push_back(p);
+        }
+      for(auto& state:poses.progression) readCombat(state);
+      const auto npcCount=integer(2);
+      if(npcCount>MaxCombatNpcs || offset+npcCount*(ActorPoseBytes+CombatStateBytes)!=bytes.size())
+        invalid(ProtocolErrorCode::Size,"Invalid combat NPC count");
+      for(size_t i=0;i<npcCount;++i) {
+        CombatNpc npc;
+        readActor(npc.pose); readCombat(npc.state);
+        poses.npcs.push_back(std::move(npc));
         }
       message.payload = std::move(poses);
       break;
@@ -303,7 +345,7 @@ Bytes encode(const Message& message) {
   Bytes bytes;
   const auto chunk = std::get_if<SnapshotChunk>(&message.payload);
   const auto poses = std::get_if<Poses>(&message.payload);
-  const auto length = HeaderBytes+bodySize(type)+(chunk ? chunk->data.size() : 0)+(poses ? poses->pickups.size()*PickupBytes : 0);
+  const auto length = HeaderBytes+bodySize(type)+(chunk ? chunk->data.size() : 0)+(poses ? poses->pickups.size()*PickupBytes+poses->npcs.size()*(ActorPoseBytes+CombatStateBytes) : 0);
   bytes.reserve(length);
   bytes.insert(bytes.end(),{'O','G','C','P'});
   put(bytes,length,4);
@@ -331,7 +373,7 @@ Bytes encode(const Message& message) {
       const auto& poses = std::get<Poses>(message.payload);
       const auto number = [&](float v) { put(bytes,std::bit_cast<uint32_t>(v),4); };
       put(bytes,poses.world,8); put(bytes,poses.tick,8); put(bytes,poses.appliedInput,8);
-      for(auto& actor:poses.actors) {
+      const auto writeActor = [&](const ActorPose& actor) {
         put(bytes,actor.player,8); put(bytes,actor.object,8);
         for(float value:actor.position) number(value);
         number(actor.yaw); number(actor.pitch); number(actor.roll);
@@ -344,13 +386,24 @@ Bytes encode(const Message& message) {
           bytes.resize(bytes.size()+AnimationNameBytes-layer.name.size(),0);
           put(bytes,layer.started,8); put(bytes,layer.blend,8); put(bytes,layer.body,4); put(bytes,layer.combination,1);
           }
-        }
+        };
+      for(const auto& actor:poses.actors) writeActor(actor);
+      const auto writeCombat = [&](const CombatState& state) {
+        for(auto value:state.attributes) put(bytes,uint32_t(value),4);
+        put(bytes,uint32_t(state.xp),4); put(bytes,uint32_t(state.next),4);
+        put(bytes,uint32_t(state.level),4); put(bytes,uint32_t(state.lp),4);
+        put(bytes,state.target,8); put(bytes,state.lastHit,8);
+        put(bytes,state.weapon,1); put(bytes,state.down,1);
+        };
       for(const auto& e:poses.equipment) { put(bytes,e.melee,8); put(bytes,e.ranged,8); }
       put(bytes,poses.pickups.size(),2);
       for(const auto& p:poses.pickups) {
         put(bytes,p.player,8); put(bytes,p.actor,8); put(bytes,p.item,8); put(bytes,p.instance,8);
         put(bytes,p.amount,8); put(bytes,p.before,8); put(bytes,p.after,8);
         }
+      for(const auto& state:poses.progression) writeCombat(state);
+      put(bytes,poses.npcs.size(),2);
+      for(const auto& npc:poses.npcs) { writeActor(npc.pose); writeCombat(npc.state); }
       break;
       }
     case MessageType::SnapshotBegin: {

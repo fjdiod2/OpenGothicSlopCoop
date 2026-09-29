@@ -1078,6 +1078,7 @@ bool Gothic::playvideoex(std::string_view name, bool, bool) {
   }
 
 bool Gothic::printscreen(std::string_view msg, int posx, int posy, std::string_view font, int timesec) {
+  if(auto session=gameSession(); session && session->script() && session->script()->isSecondaryXp()) return false;
   onPrintScreen(msg,posx,posy,timesec,Resources::font(font, Resources::FontType::Normal, 1));
   return false;
   }

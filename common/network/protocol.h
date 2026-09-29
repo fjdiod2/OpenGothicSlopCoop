@@ -16,7 +16,7 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 6;
+inline constexpr uint16_t ProtocolVersion = 7;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
@@ -27,6 +27,9 @@ inline constexpr size_t MaxAnimationLayers = 8;
 inline constexpr size_t AnimationNameBytes = 64;
 inline constexpr size_t MaxPickups = 16;
 inline constexpr size_t PickupBytes = 7*8;
+inline constexpr size_t ActorPoseBytes = 49+MaxAnimationLayers*(AnimationNameBytes+21);
+inline constexpr size_t CombatStateBytes = 66;
+inline constexpr size_t MaxCombatNpcs = 32;
 
 enum class MessageType : uint16_t {
   Hello = 1, Welcome = 2, Input = 3, StateAck = 4, Reject = 5, Accepted = 6,
@@ -40,9 +43,10 @@ enum class RejectReason : uint16_t {
 
 enum Button : uint32_t {
   Forward = 1u<<0, Backward = 1u<<1, TurnLeft = 1u<<2, TurnRight = 1u<<3,
-  StrafeLeft = 1u<<4, StrafeRight = 1u<<5, Jump = 1u<<6, Walk = 1u<<7
+  StrafeLeft = 1u<<4, StrafeRight = 1u<<5, Jump = 1u<<6, Walk = 1u<<7,
+  Attack = 1u<<8, Melee = 1u<<9
   };
-inline constexpr uint32_t KnownButtons = 0xff;
+inline constexpr uint32_t KnownButtons = 0x3ff;
 inline constexpr int16_t MaxLookDelta = 1000;
 
 struct Hello {
@@ -111,11 +115,25 @@ struct WeaponEquipment {
   uint64_t melee = 0, ranged = 0; // Instance + 1, or zero for an empty slot.
   bool operator==(const WeaponEquipment&) const = default;
   };
+struct CombatState {
+  std::array<int32_t,8> attributes = {};
+  int32_t xp = 0, next = 0, level = 0, lp = 0;
+  uint64_t target = 0, lastHit = 0;
+  uint8_t weapon = 0, down = 0; // down: 0 standing, 1 unconscious, 2 dead.
+  bool operator==(const CombatState&) const = default;
+  };
+struct CombatNpc {
+  ActorPose pose;
+  CombatState state;
+  bool operator==(const CombatNpc&) const = default;
+  };
 struct Poses {
   uint64_t world = 0, tick = 0, appliedInput = 0;
   std::array<ActorPose,2> actors;
   std::array<WeaponEquipment,2> equipment;
   std::vector<Pickup> pickups; // Ordered, atomic transfers at this revision.
+  std::array<CombatState,2> progression;
+  std::vector<CombatNpc> npcs; // Bounded updates to NPCs in the initial snapshot.
   bool operator==(const Poses&) const = default;
   };
 struct PoseAck { bool operator==(const PoseAck&) const = default; };

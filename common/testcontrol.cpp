@@ -157,6 +157,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
     out.Key("tick"); out.Uint64(world->tickCount());
     out.Key("presentation_tick"); out.Uint64(world->presentationTickCount());
     out.Key("script_function_calls"); out.Uint64(world->script().functionCalls());
+    out.Key("shared_xp_events"); out.Uint64(world->script().sharedXpEvents());
     out.Key("npc_count"); out.Uint(world->npcCount());
     const auto& registry = world->objectRegistry();
     out.Key("object_registry"); out.StartObject();
@@ -191,6 +192,9 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       out.Key("xp"); out.Int(actor.experience());
       out.Key("xp_next"); out.Int(actor.experienceNext());
       out.Key("lp"); out.Int(actor.learningPoints());
+      out.Key("attributes"); out.StartArray();
+      for(int i=0;i<8;++i) out.Int(actor.attribute(Attribute(i)));
+      out.EndArray();
       out.Key("last_hit_id"); out.Uint64(world->objectId(actor.lastHitNpc()));
       out.Key("target_id"); out.Uint64(world->objectId(actor.target()));
       };
@@ -312,6 +316,16 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       out.Key("rotation"); out.Double(other->rotation());
       out.Key("hp"); out.Int(other->attribute(ATR_HITPOINTS));
       out.Key("hp_max"); out.Int(other->attribute(ATR_HITPOINTSMAX));
+      out.Key("animation_layers"); out.StartArray();
+      for(const auto& layer:other->networkPose().layers) {
+        out.StartObject();
+        out.Key("name"); str(layer.name);
+        out.Key("started"); out.Uint64(layer.started);
+        out.Key("body"); out.Uint(layer.body);
+        out.Key("combination"); out.Uint(layer.combination);
+        out.EndObject();
+        }
+      out.EndArray();
       combatInfo(*other);
       out.EndObject();
       }
@@ -593,6 +607,12 @@ void MainWindow::pollTestControl() {
         if(cls==size_t(-1) || !game.world()->addItem(cls,pos))
           throw std::runtime_error("Cannot create shared plant fixture");
         }
+      }
+    else if(action=="fixture_learning_points") {
+      if(!game.world()->isAuthoritative() || network.status().boundPlayer!=0 ||
+         !cmd.HasMember("lp") || !cmd["lp"].IsInt() || cmd["lp"].GetInt()<0 || cmd["lp"].GetInt()>1000)
+        throw std::runtime_error("Expected initial LP in 0..1000 on an unconnected host");
+      game.world()->playerById(testInputPlayer)->handle().lp=cmd["lp"].GetInt();
       }
     else if(action=="fixture_weapons") {
       if(!game.world()->isAuthoritative()) throw std::runtime_error("Guest cannot create weapon fixture");

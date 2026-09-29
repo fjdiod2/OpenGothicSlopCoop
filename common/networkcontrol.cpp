@@ -198,9 +198,11 @@ void MainWindow::finishNetworkLoad(bool success) {
   }
 
 namespace {
-constexpr KeyCodec::Action networkActions[] = {
-  KeyCodec::Forward, KeyCodec::Back, KeyCodec::RotateL,
-  KeyCodec::RotateR, KeyCodec::Left, KeyCodec::Right
+constexpr std::pair<KeyCodec::Action,uint32_t> networkActions[] = {
+  {KeyCodec::ActionGeneric,Coop::Attack}, {KeyCodec::WeaponMele,Coop::Melee},
+  {KeyCodec::Forward,Coop::Forward}, {KeyCodec::Back,Coop::Backward},
+  {KeyCodec::RotateL,Coop::TurnLeft}, {KeyCodec::RotateR,Coop::TurnRight},
+  {KeyCodec::Left,Coop::StrafeLeft}, {KeyCodec::Right,Coop::StrafeRight}
   };
 }
 
@@ -208,21 +210,27 @@ void MainWindow::networkKey(Tempest::KeyEvent& event, bool down) {
   auto& game = Gothic::inst();
   if(network.status().snapshotState!="ready" || game.checkLoading()!=Gothic::LoadState::Idle ||
      game.localPlayerId()!=PlayerIdentity::Companion) return;
-  const auto action = keycodec.tr(event);
-  if(action!=KeyCodec::ActionGeneric && std::find(std::begin(networkActions),std::end(networkActions),action)==std::end(networkActions)) return;
+  const auto mapped = [&](const Tempest::KeyEvent& e) { auto a=keycodec.tr(e); return a==KeyCodec::Weapon ? KeyCodec::WeaponMele : a; };
+  const auto action = mapped(event);
+  if(std::none_of(std::begin(networkActions),std::end(networkActions),[&](const auto& a) { return a.first==action; })) return;
   const bool pressed = down && networkKeys.find(event.key)==networkKeys.end();
   if(down) networkKeys.insert(event.key); else networkKeys.erase(event.key);
   uint32_t buttons = 0;
   bool interacting = false;
   for(auto key:networkKeys) {
     const Tempest::KeyEvent held(key);
-    interacting |= keycodec.tr(held)==KeyCodec::ActionGeneric;
-    for(size_t i=0; i<std::size(networkActions); ++i)
-      if(keycodec.tr(held)==networkActions[i]) buttons |= uint32_t(1)<<i;
+    interacting |= mapped(held)==KeyCodec::ActionGeneric;
+    for(const auto& [a,bit]:networkActions)
+      if(mapped(held)==a) buttons |= bit;
     }
-  if(interacting) buttons = 0; // Action+forward is an interaction, not walking.
+  const auto ws=game.localPlayer()->weaponState();
+  const bool melee=ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H;
+  if(!melee) {
+    buttons &= ~Coop::Attack;
+    if(interacting) buttons &= Coop::Melee; // Unarmed action+forward is pickup.
+    }
   Item* item = nullptr;
-  if(pressed && action==KeyCodec::ActionGeneric && game.world() && game.localPlayer())
+  if(pressed && action==KeyCodec::ActionGeneric && ws==WeaponState::NoWeapon && game.world())
     item = game.world()->findFocus(*game.localPlayer(),Focus()).item;
   if(buttons!=networkButtons || item) {
     networkButtons = buttons;
@@ -265,6 +273,14 @@ void MainWindow::tickNetworkInput(bool apply) {
     networkPickupRequests = networkPickupAccepted = 0;
     networkEquipmentRequests = networkEquipmentAccepted = 0;
     networkEquipmentSent = {};
+    networkProgressSent = {};
+    networkCombatSent.clear();
+    networkCombatCursor = 0;
+    if(status.role==Coop::Role::Host && game.world())
+      for(uint32_t i=0;i<game.world()->npcCount();++i) {
+        auto npc=game.world()->npcById(i);
+        if(!npc->isPlayer()) networkCombatSent.emplace(game.world()->objectId(npc),Coop::CombatNpc{npc->networkPose(),npc->networkCombatState()});
+        }
     networkInterpolation.reset();
     if(status.role==Coop::Role::Host && game.world() && game.world()->playerById(PlayerIdentity::Companion))
       controlForPlayer(PlayerIdentity::Companion).clearInput();
@@ -274,14 +290,15 @@ void MainWindow::tickNetworkInput(bool apply) {
   auto& control = controlForPlayer(PlayerIdentity::Companion);
   float lookX = 0, lookY = 0;
   while(auto message = network.takeInput()) {
-    const auto input = std::get<Coop::Input>(message->payload);
-    for(size_t i=0; i<std::size(networkActions); ++i) {
-      const auto bit = uint32_t(1)<<i;
+    auto input = std::get<Coop::Input>(message->payload);
+    const auto ws=game.world()->playerById(PlayerIdentity::Companion)->weaponState();
+    if(ws!=WeaponState::Fist && ws!=WeaponState::W1H && ws!=WeaponState::W2H) input.buttons &= ~Coop::Attack;
+    for(const auto& [action,bit]:networkActions) {
       if((input.buttons & bit)==(remoteButtons & bit)) continue;
       if(input.buttons & bit)
-        control.onKeyPressed(networkActions[i],Tempest::Event::K_NoKey,KeyCodec::Mapping::Primary);
+        control.onKeyPressed(action,Tempest::Event::K_NoKey,KeyCodec::Mapping::Primary);
       else
-        control.onKeyReleased(networkActions[i],KeyCodec::Mapping::Primary);
+        control.onKeyReleased(action,KeyCodec::Mapping::Primary);
       }
     remoteButtons = input.buttons;
     const float sensitivity = game.settingsGetF("GAME","mouseSensitivity")/MouseUtil::mouseSysSpeed();
@@ -315,8 +332,24 @@ void MainWindow::updateNetworkPoses() {
   try {
     if(status.role==Coop::Role::Host) {
       const std::array<Coop::WeaponEquipment,2> equipment = {world->playerById(1)->networkEquipment(),world->playerById(2)->networkEquipment()};
+      const std::array<Coop::CombatState,2> progression = {world->playerById(1)->networkCombatState(),world->playerById(2)->networkCombatState()};
+      std::vector<Coop::CombatNpc> npcs;
+      // Fair bounded batches. Remember changes only when queued; do not lose a
+      // death because many other NPCs changed in the same frame.
+      for(size_t examined=0;examined<world->npcCount() && npcs.size()<Coop::MaxCombatNpcs;++examined) {
+        networkCombatCursor %= world->npcCount();
+        auto npc=world->npcById(uint32_t(networkCombatCursor++));
+        if(npc->isPlayer()) continue;
+        const auto state=npc->networkCombatState();
+        const auto previous=networkCombatSent.find(world->objectId(npc));
+        const bool nearby=(npc->position()-world->playerById(1)->position()).quadLength()<3000.f*3000.f ||
+                          (npc->position()-world->playerById(2)->position()).quadLength()<3000.f*3000.f;
+        if(!nearby && previous!=networkCombatSent.end() && previous->second.state==state) continue;
+        Coop::CombatNpc next{npc->networkPose(),state};
+        if(previous==networkCombatSent.end() || previous->second!=next) npcs.push_back(std::move(next));
+        }
       if(status.posesSent!=0 && status.poseTick==world->tickCount() && status.inputApplied==networkInstalledInput &&
-         !world->hasNetworkPickups() && equipment==networkEquipmentSent) return;
+         !world->hasNetworkPickups() && equipment==networkEquipmentSent && progression==networkProgressSent && npcs.empty()) return;
       const auto revision = std::max(status.snapshotRevision,status.posesSent)+1;
       if(revision==0) throw std::runtime_error("Pose revision exhausted");
       while(status.inputApplied<networkInstalledInput)
@@ -330,9 +363,13 @@ void MainWindow::updateNetworkPoses() {
         poses.actors[i] = world->playerById(i+1)->networkPose();
       poses.pickups = world->takeNetworkPickups();
       poses.equipment = equipment;
+      poses.progression = progression;
+      poses.npcs = std::move(npcs);
       if(!network.sendPoses(status.generation,revision,poses))
         throw std::runtime_error("Cannot queue authoritative poses");
       networkEquipmentSent = equipment;
+      networkProgressSent = progression;
+      for(const auto& npc:poses.npcs) networkCombatSent[npc.pose.object]=npc;
       return;
       }
     // Advance the existing blend before retargeting it. Otherwise a steady
@@ -354,11 +391,22 @@ void MainWindow::updateNetworkPoses() {
       std::array<Npc*,2> actors = {};
       for(size_t i=0; i<actors.size(); ++i) {
         actors[i] = world->npcByObjectId(poses.world,poses.actors[i].object);
-        if(!actors[i] || !actors[i]->validateNetworkPose(poses.actors[i]))
+        if(!actors[i] || !actors[i]->validateNetworkPose(poses.actors[i]) || !actors[i]->validateNetworkCombatState(poses.progression[i]))
           throw std::runtime_error("Unknown pose identity or animation");
+        }
+      for(const auto& npc:poses.npcs) {
+        auto actor=world->npcByObjectId(poses.world,npc.pose.object);
+        if(!actor || actor->isPlayer() || !actor->validateNetworkPose(npc.pose) || !actor->validateNetworkCombatState(npc.state))
+          throw std::runtime_error("Unknown combat NPC, reference or animation");
         }
       if(!world->applyNetworkInventory(poses.pickups,poses.equipment))
         throw std::runtime_error("Inventory update does not match the snapshot state");
+      for(size_t i=0;i<actors.size();++i) actors[i]->applyNetworkCombatState(poses.progression[i]);
+      for(const auto& npc:poses.npcs) {
+        auto actor=world->npcByObjectId(poses.world,npc.pose.object);
+        actor->applyNetworkCombatState(npc.state);
+        actor->applyNetworkPose(npc.pose);
+        }
       if(!poses.pickups.empty()) {
         player.clearFocus();
         for(auto& entry:otherPlayers) entry.second->clearFocus();

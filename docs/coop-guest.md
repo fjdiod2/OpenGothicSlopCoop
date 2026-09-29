@@ -153,3 +153,16 @@ invalid ownership/type references reject the whole frame. Normal guest unequip
 calls remain authority-guarded, like item use. Host saves and fresh snapshots
 restore slot pointers, flags, meshes and host-owned effects. See
 [weapon equipment protocol](coop-protocol.md#weapon-equipment-g03).
+
+## Combat and progression (G06)
+
+Guest melee keys send held input to the host's companion controller. Only the
+host executes targeting, animation hits, damage, AI, defeat and XP scripts. The
+guest installs validated absolute attributes, progression, weapon mode, target
+references and death/unconsciousness observations for the two players and bounded
+existing-NPC updates. Installation never invokes campaign functions; player pose
+interpolation remains visual. Normal guest damage/reward APIs stay blocked.
+Whole-frame validation precedes inventory, combat and presentation mutations.
+Unknown NPCs/references and invalid animation data reject the frame atomically.
+See [combat protocol](coop-protocol.md#combat-and-progression-g06) for field layout,
+NPC batching, persistence, input replay protection and the current melee scope.

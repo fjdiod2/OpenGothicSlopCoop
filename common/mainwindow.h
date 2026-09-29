@@ -132,6 +132,9 @@ class MainWindow : public Tempest::Window {
     uint64_t networkPickupRequests = 0, networkPickupAccepted = 0;
     uint64_t networkEquipmentRequests = 0, networkEquipmentAccepted = 0;
     std::array<Coop::WeaponEquipment,2> networkEquipmentSent;
+    std::array<Coop::CombatState,2> networkProgressSent;
+    std::map<uint64_t,Coop::CombatNpc> networkCombatSent;
+    size_t networkCombatCursor = 0;
     Coop::PoseInterpolation networkInterpolation;
 
     // Local, opt-in development interface; all commands run on the game thread.

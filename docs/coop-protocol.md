@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 6 (G03)
+# Co-op wire protocol, version 7 (G06)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -15,7 +15,10 @@ N07 makes the guest a presentation-only process; N08 transfers a host checkpoint
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
 
-Version 6 adds desired weapon equipment to `Input` and both actors’ weapon slots
+Version 7 enables melee input bits and appends player progression and bounded
+NPC combat updates to `Poses`. Version-6 peers are rejected. Checkpoints remain
+version 56: individual actor records and the original reward guards already persist.
+Version 6 added desired weapon equipment to `Input` and both actors’ weapon slots
 to `Poses`. Version-5 peers are rejected; checkpoint version remains 56.
 Version 5 added explicit pickup targets to `Input` and ordered pickup transfers
 at the end of `Poses`. Both layouts change; version-4 peers are rejected.
@@ -80,7 +83,7 @@ animation-name/unused slots specified below.
 | 8 | `SnapshotChunk` | Host → guest | 53–32,820 | `nonzero / 2 / 0 / nonzero` |
 | 9 | `SnapshotEnd` | Host → guest | 44 | `nonzero / 2 / 0 / nonzero` |
 | 10 | `SnapshotReady` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
-| 11 | `Poses` | Host → guest | 1,560–2,456 | `nonzero / 2 / 0 / nonzero` |
+| 11 | `Poses` | Host → guest | 1,694–28,030 | `nonzero / 2 / 0 / nonzero` |
 | 12 | `PoseAck` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
 
 ### Hello
@@ -211,6 +214,8 @@ EOF and cancellation while the application owns a completed snapshot.
 | 5 | `0x20` | Strafe right |
 | 6 | `0x40` | Jump |
 | 7 | `0x80` | Walk modifier |
+| 8 | `0x100` | Melee action held (normal Ctrl/action mapping) |
+| 9 | `0x200` | Draw/sheath melee on rising edge (Space or melee key) |
 
 All other bits must be zero. Both look deltas must be in `[-1000, 1000]`.
 The button mask replaces the previously held state; zero releases every button.
@@ -219,7 +224,13 @@ position, elapsed simulation time, damage or a script command. The host determin
 simulation timing and gameplay effects. N09 enables bits 0–5 through the guest's
 normal key mappings (including alternate keys). Jump/Walk remain reserved and
 are rejected by the session as `unsupported_input`. G01 permits item pickup;
-G03 permits melee/ranged weapon equipment. Other interactions and combat need later tasks. Walk is a toggle in the original controller,
+G03 permits melee/ranged weapon equipment. G06 enables bits 8–9 through the
+original controller, including action+forward attacks and directional melee
+controls. Action without a drawn melee weapon retains the G01 pickup behavior;
+the host also masks the attack bit when its actor has no drawn melee weapon.
+The host computes focus, range, collision, animation hit windows and damage.
+The guest never supplies a hit, damage amount, reward or target for an attack.
+Ranged/spell controls and other interactions remain later work. Walk is a toggle in the original controller,
 so it must not be incorrectly interpreted as a held modifier.
 
 Each changed held mask sends one sequence; relative mouse packets preserve the
@@ -274,7 +285,8 @@ that guest presentation reached a particular pose endpoint.
 All floats are finite IEEE-754 binary32, transmitted as big-endian bit patterns.
 This frame contains a 24-byte prefix, two 729-byte actor records in player order
 1, 2, two 16-byte weapon-equipment records, a u16 pickup count and zero to
-sixteen 56-byte pickup records. No native structs, pointers or array indexes cross
+sixteen 56-byte pickup records, two 66-byte combat/progression records, a u16 NPC
+count and zero to 32 NPC combat records of 795 bytes each. No native structs, pointers or array indexes cross
 the wire. The header's player 2 identifies the recipient binding, not an actor
 index within the payload.
 
@@ -289,6 +301,9 @@ index within the payload.
 | 1498 | 16 | Companion weapon equipment: u64 melee, u64 ranged |
 | 1514 | 2 | Pickup transfer count, 0–16 |
 | 1516 | count × 56 | Ordered pickup transfers |
+| 1516 + pickup count × 56 | 132 | Host then companion combat/progression records |
+| 1648 + pickup count × 56 | 2 | NPC combat count, 0–32 |
+| 1650 + pickup count × 56 | NPC count × 795 | NPC updates |
 
 Each actor record is:
 
@@ -315,15 +330,77 @@ NaN, infinity, invalid counts, padding or identities are rejected by the codec.
 After readiness, pose revisions start at 2 and increase by exactly one. Host
 capture occurs after its simulation and controller step, at most once per render
 frame, and is skipped when the tick and applied-input boundary are unchanged
-and no pickup transfers or weapon-equipment changes are pending.
+and no pickup, equipment, progression or NPC updates are pending.
 Guest frames must match generation/binding, arrive in revision order, carry
 nondecreasing host ticks/applied-input sequences and never refer to unsent input.
 There is a separate 64-frame application queue; overflow closes the connection.
 The guest resolves both typed NPC IDs in the received world namespace and validates
-both animations, the complete pickup batch and both weapon-equipment records
+both animations, the complete pickup batch, both weapon-equipment records and
+all combat states, NPC identities, references and animations
 before applying anything. Invalid
 world/object/animation/transfer state closes the connection without partially
 applying the frame.
+
+### Combat and progression (G06)
+
+Each 66-byte combat record contains, in order:
+
+| Offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 32 | Eight signed i32 attributes in script order: HP, max HP, mana, max mana, strength, dexterity, regeneration fields |
+| 32 | 16 | Signed i32 XP, next threshold, level and LP |
+| 48 | 16 | Typed NPC IDs: current target, last attacker; zero means none |
+| 64 | 1 | Weapon state, 0–6 in original engine order |
+| 65 | 1 | Outcome: 0 standing, 1 unconscious, 2 dead |
+
+Integers use network byte order; signed values use two's complement. Maximum
+HP/mana and progression must be nonnegative. The engine resolves every nonzero
+target/attacker against the loaded snapshot. A combat NPC record contains a
+729-byte actor pose with player ID **0**, followed by this combat record. NPC
+IDs must be nonzero, unique in the batch, distinct from both players and resolve
+to existing non-player NPCs. The same animation checks apply as for players.
+
+After whole-frame validation, the guest installs attributes/progression, target
+references, weapon mode and death/unconsciousness flags directly. It never calls
+damage, death, reward, AI or campaign functions. Player poses retain their 100-ms
+interpolation; NPC poses currently apply directly. Updates are absolute state,
+not additive rewards, and existing strict revision checks reject replayed frames.
+
+The host compares NPC state with the snapshot/last sent state. Nearby NPC poses
+(within 3,000 units of either player) and any changed combat state are eligible.
+A rotating scan emits at most 32 changed NPCs per frame; unsent changes remain
+pending, including while the simulation is held. Reconnect discards this cache
+and establishes a fresh snapshot baseline. This covers NPCs in the snapshot;
+live NPC spawning/removal, remote corpse inventory and projectiles remain outside
+this first combat slice. Unknown new NPC identities fail closed and require a
+fresh snapshot rather than constructing an independent NPC on the guest.
+
+For campaign hosts with a saved companion, an engine hook fans out the installed
+`B_GivePlayerXP` call to both roster members, including an offline companion.
+The original function executes for the host and then with `HERO` temporarily
+bound to the companion, using each actor's existing XP/threshold/LP/attributes.
+The companion pass suppresses the function's final `B_CheckLog` call and duplicate
+host-side print/sound effects. Other death/quest/item effects execute once in the
+host context. `HERO` is restored on scope exit; `PC_HERO` stays bound to the host.
+Defeating a roster player does not produce a shared XP reward.
+
+Monster eligibility and deduplication remain in the original defeat scripts:
+the installed `ZS_Dead` checks the victim's persistent `aivar[16]` before its
+eligible XP call and marks it rewarded afterward. One host script execution
+awards both actors without an intervening input/save boundary. The actor records
+and that guard survive save/restart; rewinding restores both to the checkpoint.
+No second death script, cloned loot, new reward RPC or guest reward execution is
+introduced. `shared_xp_events` is a process-local diagnostic counter, not the
+durable reward guard. The no-network G05 baseline retains original single-hero XP.
+Quest reward delivery is still gated by G07–G09 acceptance; the XP hook alone
+does not establish quest/dialogue replication or per-player script compatibility.
+
+The `combat-state` codec case checks exact layout, every split/truncation, maximum
+batch, invalid outcomes/references by type, duplicate IDs and nonfinite poses.
+The parent `shared-combat` scenario uses real host/guest attacks, both finishers,
+concurrent attacks, duplicate/stale input, original level-up, an offline companion,
+aggressive AI against either player, disk restarts and atomic malformed-frame
+rejection. Concrete run results are recorded in the parent `TESTING.md`.
 
 ### Pickup transfers (G01)
 
@@ -489,8 +566,9 @@ ticks. Campaign time and all animation gameplay effects stay host-only.
 Each window's existing local camera follows its own actor (host 1, guest 2).
 
 The two characters' movement/animation and their successful world-item pickups
-and weapon equipment are replicated. NPC AI, combat, other equipment/use,
-dialogue, quests and other world changes still require later gameplay tasks.
+and weapon equipment are replicated. G06 also replicates combat/progression and
+existing NPC combat poses/outcomes; AI remains host-only. Ranged/spell controls,
+other equipment/use, dialogue, quests and other world changes require later tasks.
 See [guest authority](coop-guest.md) for the campaign authority boundary.
 `Poses` does not imply a full-world revision or a disk commit.
 
@@ -504,7 +582,7 @@ Reasons: `1` protocol version, `2` engine fingerprint, `3` game-data fingerprint
 `4` host full, `5` invalid session/handshake. Any other value is malformed. No
 arbitrary error string crosses the wire. A reject is a terminal handshake reply,
 followed by closing the connection. On an undecodable/unsupported peer version,
-closing without a reply is also valid; a peer might not understand a version-6
+closing without a reply is also valid; a peer might not understand a version-7
 reject. Runtime connection failure and stale input are handled by the session
 layer, not by sending an unbound reject in the middle of gameplay.
 
@@ -866,7 +944,7 @@ This 77-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 0000004d 0006 0003
+4f474350 0000004d 0007 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
@@ -898,9 +976,9 @@ checks live and saved NPC reuse, separate inventory/HP/poses and script identity
 
 Only a C++20 compiler and CMake are required; the commands below use Ninja.
 This standalone project does not configure OpenGothic's dependencies, read Steam
-assets, start a GUI, or require initialized engine submodules. It runs 13 codec
+assets, start a GUI, or require initialized engine submodules. It runs 16 codec
 cases plus four object-registry and two interpolation cases everywhere, and
-eighteen connection/fingerprint cases on macOS (37 total); the latter use
+eighteen connection/fingerprint cases on macOS (40 total); the latter use
 loopback sockets and may need permission outside an agent's network sandbox.
 
 ```sh
@@ -929,7 +1007,7 @@ reinterpret saved player identity as a connection ID or silently relax limits.
 `pickup-transfers` in the asset-free suite covers literal target bytes, every
 fragmentation point, transfer roundtrips, invalid counts, target pairs, actor
 identities, arithmetic overflow and duplicate IDs. G01 added the 38th macOS case;
-G03 adds a 39th for weapon equipment. Parent runner `guest-pickup` exercises normal keyboard pickup, inventory
+G03 adds a 39th for weapon equipment; G06 adds the 40th for combat state. Parent runner `guest-pickup` exercises normal keyboard pickup, inventory
 inspection, committed save/restart/fresh rejoin and whole-frame rejection of
 wrong-kind items, inconsistent counts and an invalid second transfer after a
 valid first record. `guest-isolation` verifies only the intended pickup inventory,

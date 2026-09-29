@@ -189,7 +189,7 @@ struct Session::Impl {
       if(peer.receivedInput==std::numeric_limits<uint64_t>::max() || message.sequence!=peer.receivedInput+1) {
         event("input_sequence_gap"); return false;
         }
-      if((std::get<Input>(message.payload).buttons & ~uint32_t(0x3f))!=0) {
+      if((std::get<Input>(message.payload).buttons & ~uint32_t(0x3f|Attack|Melee))!=0) {
         event("unsupported_input"); return false;
         }
       if(peer.inputs.size()>=64) { event("input_queue_full"); return false; }

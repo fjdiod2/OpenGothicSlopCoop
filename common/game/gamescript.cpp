@@ -99,6 +99,30 @@ GameScript::GameScript(GameSession &owner)
   Gothic::inst().setupVmCommonApi(vm);
   aiDefaultPipe.reset(new GlobalOutput(*this));
   initCommon();
+  // Keep the installed XP/level-up rules. Only fan out this narrow entry point;
+  // monster death/quest scripts and their persistent reward guards run once.
+  if(auto reward = vm.find_symbol_by_name("B_GIVEPLAYERXP")) {
+    vm.override_function("B_GIVEPLAYERXP", [this,reward](int32_t amount) {
+      if(!isAuthoritative()) return;
+      auto companion = world().playerById(2);
+      const bool sharing = CommandLine::inst().coopEndpoint().role==Coop::Role::Host && companion && amount>0;
+      auto source = findNpc(vm.global_self());
+      if(sharing && source && source->isPlayer() && source->isDown()) return;
+      vm.call_function(reward,amount); // C++ calls execute the original bytecode.
+      if(!sharing) return;
+      ++xpEvents;
+      ScopeVar hero(*vm.global_hero(),companion->handlePtr());
+      struct Restore { bool& value; ~Restore() { value=false; } } restore{secondaryXp};
+      secondaryXp = true;
+      vm.call_function(reward,amount);
+      });
+    }
+  if(auto check = vm.find_symbol_by_name("B_CHECKLOG")) {
+    vm.override_function("B_CHECKLOG", [this,check] {
+      // The XP function's final campaign/log update belongs to the host only.
+      if(!secondaryXp) vm.call_function(check);
+      });
+    }
   initSettings();
   Gothic::inst().onSettingsChanged.bind(this,&GameScript::initSettings);
   }
@@ -3424,6 +3448,7 @@ bool GameScript::infomanager_hasfinished() {
   }
 
 void GameScript::snd_play(std::string_view fileS) {
+  if(secondaryXp) return;
   if(aiProcessPolicy>=NpcProcessPolicy::AiFar2)
     return;
 

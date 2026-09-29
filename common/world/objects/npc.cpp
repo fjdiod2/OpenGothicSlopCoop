@@ -409,6 +409,32 @@ bool Npc::validateNetworkPose(const Coop::ActorPose& pose) const {
          visual.validateNetworkLayers(pose.layers);
   }
 
+Coop::CombatState Npc::networkCombatState() const {
+  Coop::CombatState state;
+  std::copy_n(hnpc->attribute,state.attributes.size(),state.attributes.begin());
+  state.xp=hnpc->exp; state.next=hnpc->exp_next; state.level=hnpc->level; state.lp=hnpc->lp;
+  state.target=owner.objectId(target()); state.lastHit=owner.objectId(lastHit);
+  state.weapon=uint8_t(weaponState());
+  state.down=isDead() ? 2 : (isUnconscious() ? 1 : 0);
+  return state;
+  }
+
+bool Npc::validateNetworkCombatState(const Coop::CombatState& state) const {
+  const auto valid = [&](uint64_t id) { return id==0 || owner.npcByObjectId(owner.objectRegistry().worldNamespace(),id)!=nullptr; };
+  return !owner.isAuthoritative() && valid(state.target) && valid(state.lastHit);
+  }
+
+void Npc::applyNetworkCombatState(const Coop::CombatState& state) {
+  if(owner.isAuthoritative()) throw std::runtime_error("Cannot apply combat replica to authoritative NPC");
+  // Direct state installation, deliberately bypassing damage, death and XP scripts.
+  std::copy(state.attributes.begin(),state.attributes.end(),hnpc->attribute);
+  hnpc->exp=state.xp; hnpc->exp_next=state.next; hnpc->level=state.level; hnpc->lp=state.lp;
+  setTarget(owner.npcByObjectId(owner.objectRegistry().worldNamespace(),state.target));
+  lastHit=owner.npcByObjectId(owner.objectRegistry().worldNamespace(),state.lastHit);
+  replicaDown=state.down;
+  visual.setToFightMode(WeaponState(state.weapon));
+  }
+
 void Npc::applyNetworkPose(const Coop::ActorPose& pose) {
   if(owner.isAuthoritative()) throw std::runtime_error("Cannot apply replica pose to authoritative NPC");
   setPosition(pose.position[0],pose.position[1],pose.position[2]);
@@ -4185,6 +4211,7 @@ bool Npc::isEnemy(const Npc &other) const {
   }
 
 bool Npc::isDead() const {
+  if(replicaDown) return *replicaDown==2;
   return owner.script().isDead(*this);
   }
 
@@ -4193,6 +4220,7 @@ bool Npc::isLie() const {
   }
 
 bool Npc::isUnconscious() const {
+  if(replicaDown) return *replicaDown==1;
   return owner.script().isUnconscious(*this);
   }
 
