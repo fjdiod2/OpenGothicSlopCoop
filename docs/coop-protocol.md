@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 8 (G06b)
+# Co-op wire protocol, version 9 (G08)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -15,6 +15,8 @@ N07 makes the guest a presentation-only process; N08 transfers a host checkpoint
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
 
+Version 9 appends an optional host dialogue/story projection to `Poses`. Version-8
+peers are rejected. Checkpoints remain version 56; the projection is transient.
 Version 8 adds audited consumable-use intent, ordered inventory removals and
 personal talent/counter/held-item state. Version-7 peers are rejected; checkpoints
 remain version 56 because original actor and inventory records already persist
@@ -50,7 +52,8 @@ clock separation, blocked effects and the acceptance test. `connected` and
 All integers are unsigned, big-endian, unless explicitly marked signed. Signed
 16-bit values use two's complement. Serialize fields individually: C++ object
 layout, padding, native endianness and pointers are never used for wire fields.
-The snapshot body is explicitly an opaque compatible engine checkpoint.
+Snapshot and story-archive bodies explicitly use the compatible engine checkpoint
+serialization format.
 Fingerprints are raw bytes, not hexadecimal text.
 
 Every frame begins with this 44-byte header. Offsets are zero-based:
@@ -59,7 +62,7 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `8` |
+| 8 | 2 | Version | Exactly `9` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
@@ -87,7 +90,7 @@ animation-name/unused slots specified below.
 | 8 | `SnapshotChunk` | Host → guest | 53–32,820 | `nonzero / 2 / 0 / nonzero` |
 | 9 | `SnapshotEnd` | Host → guest | 44 | `nonzero / 2 / 0 / nonzero` |
 | 10 | `SnapshotReady` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
-| 11 | `Poses` | Host → guest | 2,150–28,486 | `nonzero / 2 / 0 / nonzero` |
+| 11 | `Poses` | Host → guest | 2,154–61,258 | `nonzero / 2 / 0 / nonzero` |
 | 12 | `PoseAck` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
 
 ### Hello
@@ -291,8 +294,8 @@ This frame contains a 24-byte prefix, two 729-byte actor records in player order
 1, 2, two 16-byte weapon-equipment records, a u16 pickup count and zero to
 sixteen 56-byte pickup records, two 66-byte combat/progression records, a u16 NPC
 count and zero to 32 NPC combat records of 795 bytes each, followed by two
-228-byte personal records (host, companion). No native structs, pointers or array indexes cross
-the wire. The header's player 2 identifies the recipient binding, not an actor
+228-byte personal records (host, companion), a u32 story length and optional story
+archive. The fixed fields contain no native structs, pointers or array indexes. The header's player 2 identifies the recipient binding, not an actor
 index within the payload.
 
 | Payload offset | Bytes | Field |
@@ -310,6 +313,8 @@ index within the payload.
 | 1648 + pickup count × 56 | 2 | NPC combat count, 0–32 |
 | 1650 + pickup count × 56 | NPC count × 795 | NPC updates |
 | 1650 + pickup count × 56 + NPC count × 795 | 456 | Host then companion personal records |
+| 2106 + pickup count × 56 + NPC count × 795 | 4 | Story archive byte count, 0–32,768 |
+| 2110 + pickup count × 56 + NPC count × 795 | variable | Optional story archive |
 
 Each actor record is:
 
@@ -1074,7 +1079,7 @@ This 77-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 0000004d 0008 0003
+4f474350 0000004d 0009 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
@@ -1143,3 +1148,64 @@ wrong-kind items, inconsistent counts and an invalid second transfer after a
 valid first record. `guest-isolation` verifies only the intended pickup inventory,
 world item/tombstone and pose entries change; scripts/quests/damage stay host-only.
 See parent `TESTING.md` for run artifacts and regression results.
+
+
+## Host-controlled dialogue and story projection (G08)
+
+The host remains the sole conversation owner and runs the unchanged original
+conditions/actions with canonical host `HERO`/`OTHER`. The guest receives display
+state, not executable dialogue requests. There is no accepted guest choice opcode
+in version 9: Enter, arrows, Escape and mouse selection in a mirrored conversation
+cannot select/skip host dialogue. Existing sequenced input retains its duplicate,
+generation and direction validation. G09 will introduce explicit guest ownership.
+
+`Poses` ends with a big-endian u32 archive length and that many bytes. A zero
+length means unchanged story state. A nonempty value is a compatible engine
+`Serialize` ZIP with exactly one entry, `story`, limited to 32 KiB compressed and
+1 MiB expanded. Its contents use the existing checkpoint serialization format,
+not the outer wire integer format. The exact executable/data handshake is required,
+as with the initial snapshot. This is not a portable or hostile-host archive API.
+The whole frame, including a full NPC batch, remains below the 64 KiB cap.
+
+The entry contains, in order:
+
+- Dialogue active/choices-visible/speaker-is-host flags; host and NPC object IDs;
+  selected row; current subtitle; choice count and pairs of title/function symbol.
+- Existing quest-log, known-info and guild-attitude records (`saveQuests`).
+- Inventory actor count, followed by object ID and existing inventory records for
+  the host and the current/most recent dialogue NPC. Previously installed NPC
+  outcomes remain in the replica; the update does not accumulate past NPC inventories.
+
+Guest installation resolves all identities in the current world and uses saved
+item allocation, never item constructors, dialogue conditions/actions, equip/use
+callbacks or reward helpers. Companion inventory is excluded from this projection.
+Both players' XP/LP/level/attributes continue through the existing progression
+records; `B_GIVEPLAYERXP` shares the original positive XP with the companion once,
+while the host alone updates the campaign journal. Unique handovers are executed
+once against the host inventory. Nearby NPC combat/animation changes use the
+existing NPC pose records. Global Daedalus variables remain authoritative on the
+host; guest journal/history are display replicas, not a second quest simulation.
+
+The host compares uncompressed contents to avoid timestamp-dependent updates,
+sends changed projections in the same strictly ordered pose stream, and clears
+its comparison cache on a new connection. Duplicate, stale or wrong-direction
+pose frames fail session validation before installation. A projection cannot run
+a reward script even when received repeatedly. Initial/rejoin snapshots and disk
+checkpoints carry canonical durable state; transient menu ownership is not saved.
+
+Saving during a conversation or cutscene queues the request with `pending` status.
+It stays pending until both end; only then is the checkpoint boundary captured
+and the normal atomic writer started. Death cancels the request with
+`denied_failure`, and world replacement cancels it under the existing load fence.
+No mid-dialogue request is silently acknowledged as completed.
+
+Acceptance covers Bosper's bow (150 XP each, one bow consumed, history prevents a
+second turn-in even with a spare) and Lares's original chapter-3 ornament recovery
+(one `ITMI_ORNAMENT_ADDON_VATRAS` to the host). Fixtures arrange NPCs/items/chapter
+prerequisites offline; normal dialogue performs the outcomes. This does not claim
+a full campaign audit: live NPC creation/removal, level transitions, trade/trainer
+replication and personal faction/story state remain outside this tested slice.
+Dialogue voice playback and transient reward popups are not mirrored in G08;
+the guest receives subtitle text, choices and durable reward state.
+A projection exceeding its limits terminates replication explicitly rather than
+silently truncating the journal or inventories.

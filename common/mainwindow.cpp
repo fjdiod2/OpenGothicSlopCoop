@@ -445,6 +445,7 @@ void MainWindow::keyDownEvent(KeyEvent &event) {
       event.accept();
       }
     else if(Gothic::inst().isCoopFailed()) return;
+    else if(dialogs.isActive()) dialogs.keyDownEvent(event);
     else if(inventory.isActive()) inventory.keyDownEvent(event);
     else if(keycodec.tr(event)==KeyCodec::Inventory && Gothic::inst().localPlayer() &&
             network.status().snapshotState=="ready") {
@@ -1186,11 +1187,6 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
     saveStatus = "denied_guest";
     return;
     }
-  if(dialogs.isActive())
-    return;
-  if(auto w = Gothic::inst().world(); w!=nullptr && w->currentCs()!=nullptr)
-    return;
-
   if(!Gothic::inst().world()) return;
   queuedSave = SaveRequest{std::string(slot),std::string(name),testSaveDelayMs};
   testSaveDelayMs = 0;
@@ -1202,6 +1198,8 @@ void MainWindow::beginQueuedSave() try {
   auto& game = Gothic::inst();
   if(handleCoopFailure()) return;
   if(!queuedSave || game.checkLoading()!=Gothic::LoadState::Idle || game.isNetworkPaused()) return;
+  // Keep the request pending until dialogue callbacks and cutscenes finish.
+  if(dialogs.isActive() || (game.world() && game.world()->currentCs()!=nullptr)) return;
   auto request = std::move(*queuedSave);
   queuedSave.reset();
   if(!game.world() || dialogs.isActive() || game.world()->currentCs()!=nullptr) {

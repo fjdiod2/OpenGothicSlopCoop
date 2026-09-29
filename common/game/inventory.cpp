@@ -95,10 +95,12 @@ void Inventory::implLoad(Npc* owner, World& world, Serialize &s) {
   uint32_t sz=0;
   items.clear();
   s.read(sz);
+  if(sz>s.remainingBytes()) throw std::runtime_error("Invalid inventory count");
   for(size_t i=0;i<sz;++i)
     items.emplace_back(std::make_unique<Item>(world,s,Item::T_Inventory));
 
   s.read(sz);
+  if(sz>s.remainingBytes()/8) throw std::runtime_error("Invalid inventory slot count");
   mdlSlots.resize(sz);
   for(auto& i:mdlSlots) {
     s.read(i.slot);

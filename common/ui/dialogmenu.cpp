@@ -11,6 +11,8 @@
 #include "gothic.h"
 #include "inventorymenu.h"
 #include "resources.h"
+#include "game/serialize.h"
+#include "world/world.h"
 
 using namespace Tempest;
 
@@ -64,6 +66,7 @@ void DialogMenu::setupSettings() {
   }
 
 void DialogMenu::tick(uint64_t dt) {
+  if(replica) return;
   if(state==State::PreStart) {
     except.clear();
     dlgTrade=false;
@@ -352,6 +355,7 @@ void DialogMenu::close() {
   currentSnd = SoundEffect();
   update();
 
+  if(replica) { replica=false; replicaChoices=false; return; }
   if(prevPl!=nullptr && prevPl==prevNpc){
     auto i = prevPl->interactive();
     if(i!=nullptr)
@@ -518,10 +522,12 @@ void DialogMenu::paintChoice(PaintEvent &e) {
   }
 
 bool DialogMenu::isChoiceMenuActive() const {
+  if(replica) return replicaChoices;
   return choice.size()!=0 && current.time==0 && !haveToWaitOutput() && trade.isOpen()==InventoryMenu::State::Closed;
   }
 
 void DialogMenu::onSelect() {
+  if(replica) return;
   if(current.time>0 || haveToWaitOutput()){
     return;
     }
@@ -533,6 +539,7 @@ void DialogMenu::onSelect() {
   }
 
 void DialogMenu::mouseDownEvent(MouseEvent &event) {
+  if(replica) { event.accept(); return; }
   if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
     event.ignore();
     return;
@@ -547,6 +554,7 @@ void DialogMenu::mouseDownEvent(MouseEvent &event) {
   }
 
 void DialogMenu::mouseWheelEvent(MouseEvent &e) {
+  if(replica) { e.accept(); return; }
   if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
     e.ignore();
     return;
@@ -561,6 +569,7 @@ void DialogMenu::mouseWheelEvent(MouseEvent &e) {
   }
 
 void DialogMenu::keyDownEvent(KeyEvent &e) {
+  if(replica) { e.accept(); return; }
   if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
     e.ignore();
     return;
@@ -594,3 +603,48 @@ void DialogMenu::keyUpEvent(KeyEvent &event) {
     }
   }
 
+
+void DialogMenu::saveNetwork(Serialize& out) const {
+  auto world=Gothic::inst().world();
+  out.write(isActive(),isChoiceMenuActive(),curentIsPl,
+            world->objectId(pl),world->objectId(other),uint32_t(dlgSel),
+            current.time>0 ? current.txt : std::string(),uint32_t(choice.size()));
+  for(const auto& c:choice) out.write(c.title,c.scriptFn);
+  }
+
+void DialogMenu::applyNetwork(Serialize& in) {
+  if(!Gothic::inst().isGuest()) throw std::runtime_error("Dialogue projection is guest-only");
+  bool active=false, choicesActive=false, speaker=false;
+  uint64_t actor=0, npc=0;
+  uint32_t selection=0, count=0;
+  std::string text;
+  in.read(active,choicesActive,speaker,actor,npc,selection,text,count);
+  if(count>128 || text.size()>16384) throw std::runtime_error("Oversized dialogue projection");
+  std::vector<GameScript::DlgChoice> next;
+  for(uint32_t i=0;i<count;++i) {
+    GameScript::DlgChoice c;
+    in.read(c.title,c.scriptFn);
+    if(c.title.size()>4096) throw std::runtime_error("Oversized dialogue choice");
+    next.push_back(std::move(c));
+    }
+  auto world=Gothic::inst().world();
+  auto player=world->npcByObjectId(world->objectRegistry().worldNamespace(),actor);
+  auto otherNpc=world->npcByObjectId(world->objectRegistry().worldNamespace(),npc);
+  if((active && (!player || player!=world->playerById(1) || !otherNpc)) ||
+     (count>0 && selection>=count) || (choicesActive && (!active || count==0)))
+    throw std::runtime_error("Invalid dialogue owner or selection");
+  replica=true;
+  replicaChoices=choicesActive;
+  state=active ? State::Active : State::Idle;
+  pl=player; other=otherNpc;
+  dlgSel=selection;
+  choice=std::move(next);
+  current.txt=std::move(text);
+  // A replica does not tick its own dialogue clock. Keep the subtitle inside
+  // the visible interval until the next authoritative text/clear update.
+  current.msgTime=2*ANIM_TIME+2;
+  current.time=current.txt.empty() ? 0 : ANIM_TIME+1;
+  curentIsPl=speaker;
+  choiceAnimTime=choicesActive ? ANIM_TIME : 0;
+  update();
+  }

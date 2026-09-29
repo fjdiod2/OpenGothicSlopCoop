@@ -16,7 +16,7 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 8;
+inline constexpr uint16_t ProtocolVersion = 9;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
@@ -26,6 +26,7 @@ inline constexpr size_t SnapshotChunkBytes = 32*1024;
 inline constexpr size_t MaxAnimationLayers = 8;
 inline constexpr size_t AnimationNameBytes = 64;
 inline constexpr size_t MaxPickups = 16;
+inline constexpr size_t MaxStoryBytes = 32*1024;
 inline constexpr size_t PickupBytes = 7*8;
 inline constexpr size_t ActorPoseBytes = 49+MaxAnimationLayers*(AnimationNameBytes+21);
 inline constexpr size_t CombatStateBytes = 66;
@@ -145,6 +146,7 @@ struct Poses {
   std::vector<Pickup> pickups; // Ordered, atomic transfers at this revision.
   std::array<CombatState,2> progression;
   std::vector<CombatNpc> npcs; // Bounded updates to NPCs in the initial snapshot.
+  Bytes story; // Optional authoritative dialogue/journal/inventory projection.
   std::array<PlayerState,2> personal;
   bool operator==(const Poses&) const = default;
   };

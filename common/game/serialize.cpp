@@ -91,6 +91,12 @@ Serialize::~Serialize() {
     }
   }
 
+void Serialize::discard() {
+  if(fout==nullptr) return;
+  mz_zip_writer_end(&impl);
+  fout=nullptr;
+  }
+
 void Serialize::finish() {
   if(fout==nullptr)
     return;
@@ -211,6 +217,7 @@ void Serialize::implWrite(const std::string& s) {
 void Serialize::implRead(std::string& s) {
   uint32_t sz=0;
   implRead(sz);
+  if(sz>remainingBytes()) throw std::runtime_error("Invalid string length");
   s.resize(sz);
   if(sz>0)
     readBytes(&s[0],sz);

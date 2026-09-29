@@ -50,7 +50,7 @@ size_t bodySize(MessageType type) {
     case MessageType::SnapshotEnd:
     case MessageType::SnapshotReady:
     case MessageType::PoseAck: return 0;
-    case MessageType::Poses: return 58+2*ActorPoseBytes+2*CombatStateBytes+2+2*PlayerStateBytes;
+    case MessageType::Poses: return 62+2*ActorPoseBytes+2*CombatStateBytes+2+2*PlayerStateBytes;
     }
   invalid(ProtocolErrorCode::Type,"Unknown co-op message type");
   }
@@ -85,6 +85,7 @@ void validateHeader(const Message& message, MessageType type) {
 
 void validatePayload(const Message& message) {
   if(auto poses = std::get_if<Poses>(&message.payload)) {
+    if(poses->story.size()>MaxStoryBytes) invalid(ProtocolErrorCode::Size,"Story projection too large");
     for(const auto& e:poses->equipment)
       if(e.melee>uint64_t(UINT32_MAX)+1 || e.ranged>uint64_t(UINT32_MAX)+1 || (e.melee!=0 && e.melee==e.ranged))
         invalid(ProtocolErrorCode::Fields,"Invalid weapon equipment");
@@ -193,13 +194,8 @@ Message readHeader(std::span<const uint8_t> bytes) {
   const auto type = MessageType(get(bytes,10,2));
   const auto length = get(bytes,4,4);
   const auto fixed = HeaderBytes+bodySize(type);
-  bool poseLength = false;
-  for(size_t n=0;n<=MaxCombatNpcs;++n) {
-    const auto base=fixed+n*(ActorPoseBytes+CombatStateBytes);
-    poseLength |= length>=base && length-base<=MaxPickups*PickupBytes && (length-base)%PickupBytes==0;
-    }
   const bool validLength = type==MessageType::SnapshotChunk ? (length>fixed && length<=fixed+SnapshotChunkBytes) :
-                           type==MessageType::Poses ? poseLength : length==fixed;
+                           type==MessageType::Poses ? length>=fixed : length==fixed;
   if(!validLength)
     invalid(ProtocolErrorCode::Size,"Co-op payload length does not match message type");
   Message message;
@@ -292,7 +288,7 @@ Message decode(std::span<const uint8_t> bytes) {
         }
       for(auto& state:poses.progression) readCombat(state);
       const auto npcCount=integer(2);
-      if(npcCount>MaxCombatNpcs || offset+npcCount*(ActorPoseBytes+CombatStateBytes)+2*PlayerStateBytes!=bytes.size())
+      if(npcCount>MaxCombatNpcs || offset+npcCount*(ActorPoseBytes+CombatStateBytes)+2*PlayerStateBytes+4>bytes.size())
         invalid(ProtocolErrorCode::Size,"Invalid combat NPC count");
       for(size_t i=0;i<npcCount;++i) {
         CombatNpc npc;
@@ -312,6 +308,10 @@ Message decode(std::span<const uint8_t> bytes) {
           else state.heldSlot.push_back(c);
           }
         }
+      const auto storySize=integer(4);
+      if(storySize>MaxStoryBytes || storySize!=bytes.size()-offset)
+        invalid(ProtocolErrorCode::Size,"Invalid story projection length");
+      poses.story.assign(bytes.begin()+std::ptrdiff_t(offset),bytes.end());
       message.payload = std::move(poses);
       break;
       }
@@ -368,7 +368,8 @@ Bytes encode(const Message& message) {
   Bytes bytes;
   const auto chunk = std::get_if<SnapshotChunk>(&message.payload);
   const auto poses = std::get_if<Poses>(&message.payload);
-  const auto length = HeaderBytes+bodySize(type)+(chunk ? chunk->data.size() : 0)+(poses ? poses->pickups.size()*PickupBytes+poses->npcs.size()*(ActorPoseBytes+CombatStateBytes) : 0);
+  const auto length = HeaderBytes+bodySize(type)+(chunk ? chunk->data.size() : 0)+(poses ? poses->pickups.size()*PickupBytes+poses->npcs.size()*(ActorPoseBytes+CombatStateBytes)+poses->story.size() : 0);
+  if(length>MaxFrameBytes) invalid(ProtocolErrorCode::Size,"Frame too large");
   bytes.reserve(length);
   bytes.insert(bytes.end(),{'O','G','C','P'});
   put(bytes,length,4);
@@ -435,6 +436,8 @@ Bytes encode(const Message& message) {
         bytes.insert(bytes.end(),state.heldSlot.begin(),state.heldSlot.end());
         bytes.resize(bytes.size()+HeldSlotBytes-state.heldSlot.size(),0);
         }
+      put(bytes,poses.story.size(),4);
+      bytes.insert(bytes.end(),poses.story.begin(),poses.story.end());
       break;
       }
     case MessageType::SnapshotBegin: {
@@ -543,7 +546,7 @@ std::optional<Message> Decoder::pop() {
   if(auto chunk = std::get_if<SnapshotChunk>(&message.payload))
     queuedBytes -= chunk->data.size();
   if(auto poses = std::get_if<Poses>(&message.payload))
-    queuedBytes -= poses->pickups.size()*PickupBytes+poses->npcs.size()*(ActorPoseBytes+CombatStateBytes);
+    queuedBytes -= poses->pickups.size()*PickupBytes+poses->npcs.size()*(ActorPoseBytes+CombatStateBytes)+poses->story.size();
   return message;
   }
 

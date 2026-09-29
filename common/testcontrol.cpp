@@ -52,7 +52,25 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   rapidjson::StringBuffer data;
   rapidjson::Writer<rapidjson::StringBuffer> out(data);
   auto str = [&](std::string_view text) {
-    out.String(text.empty() ? "" : text.data(), rapidjson::SizeType(text.size()));
+    // Installed scripts mix UTF-8 with legacy single-byte text (including the
+    // untranslated Lares ornament option). Keep JSON valid without changing
+    // scripts or the engine's original font bytes. Valid UTF-8 passes unchanged;
+    // otherwise preserve the offending byte as its Latin-1 code point.
+    std::string utf8;
+    for(size_t i=0;i<text.size();) {
+      const auto c=uint8_t(text[i]);
+      size_t n=c<0x80 ? 1 : c>=0xc2 && c<=0xdf ? 2 : c>=0xe0 && c<=0xef ? 3 : c>=0xf0 && c<=0xf4 ? 4 : 0;
+      bool valid=n!=0 && n<=text.size()-i;
+      for(size_t j=1;valid && j<n;++j) valid=(uint8_t(text[i+j]) & 0xc0)==0x80;
+      if(valid && n>=3) {
+        const auto second=uint8_t(text[i+1]);
+        valid=!(c==0xe0 && second<0xa0) && !(c==0xed && second>=0xa0) &&
+              !(c==0xf0 && second<0x90) && !(c==0xf4 && second>=0x90);
+        }
+      if(valid) { utf8.append(text.substr(i,n)); i+=n; }
+      else { utf8.push_back(char(0xc0 | (c>>6))); utf8.push_back(char(0x80 | (c & 0x3f))); ++i; }
+      }
+    out.String(utf8.data(),rapidjson::SizeType(utf8.size()));
     };
   auto& game = Gothic::inst();
   const bool idle = game.checkLoading()==Gothic::LoadState::Idle;
@@ -693,7 +711,7 @@ void MainWindow::pollTestControl() {
         throw std::runtime_error("Dialogue NPC fixture requires held offline gameplay");
       if(!cmd.HasMember("symbol") || !cmd["symbol"].IsString()) throw std::runtime_error("Expected NPC instance");
       const std::string_view name=cmd["symbol"].GetString();
-      if(name!="VLK_413_BOSPER" && name!="VLK_440_BARTOK") throw std::runtime_error("Unsupported dialogue fixture NPC");
+      if(name!="VLK_413_BOSPER" && name!="VLK_440_BARTOK" && name!="VLK_449_LARES") throw std::runtime_error("Unsupported dialogue fixture NPC");
       const auto instance=world->script().findSymbolIndex(name);
       if(instance==size_t(-1)) throw std::runtime_error("Missing original NPC definition");
       for(uint32_t i=0;i<world->npcCount();++i)
@@ -707,6 +725,23 @@ void MainWindow::pollTestControl() {
       auto target=world->addNpc(instance,pos);
       if(!target) throw std::runtime_error("Cannot create dialogue NPC");
       target->setDirection(actor->position()-pos);
+      }
+    else if(action=="fixture_lares_ornament") {
+      auto world=game.world();
+      if(!world->isAuthoritative() || runtimeMode!=R_Suspended || dialogs.isActive() ||
+         network.status().role!=Coop::Role::Disabled)
+        throw std::runtime_error("Lares prerequisite fixture requires held offline gameplay");
+      auto& script=world->script();
+      Npc* lares=nullptr;
+      for(uint32_t i=0;i<world->npcCount();++i)
+        if(world->npcById(i)->instanceSymbol()==script.findSymbolIndex("VLK_449_LARES")) lares=world->npcById(i);
+      if(!lares) throw std::runtime_error("Lares fixture must exist first");
+      const auto item=script.findSymbolIndex("ITMI_ORNAMENT_ADDON_VATRAS");
+      if(lares->getItem(item)) throw std::runtime_error("Lares already has the ornament");
+      // Reproduce the original chapter-3 recovery prerequisite: Lares still
+      // holds Vatras's ornament. No host item, info history or reward is granted.
+      script.findSymbol("KAPITEL")->set_int(3);
+      lares->addItem(item,1);
       }
     else if(action=="fixture_quest") {
       auto& script = game.world()->script();
@@ -1016,8 +1051,6 @@ void MainWindow::pollTestControl() {
       loadGame("save_slot_99.sav");
       }
     else if(action=="save") {
-      if(dialogs.isActive() || game.world()->currentCs()!=nullptr)
-        throw std::runtime_error("Cannot save during dialogue or a cutscene");
       testSaveDelayMs = 0;
       if(cmd.HasMember("delay_ms")) {
         if(!cmd["delay_ms"].IsUint() || cmd["delay_ms"].GetUint()>2000)

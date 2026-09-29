@@ -309,6 +309,8 @@ void MainWindow::tickNetworkInput(bool apply) {
     networkProgressSent = {};
     networkPersonalSent = {};
     networkCombatSent.clear();
+    networkStorySent.clear();
+    networkStoryNpc=0;
     networkCombatCursor = 0;
     if(status.role==Coop::Role::Host && game.world())
       for(uint32_t i=0;i<game.world()->npcCount();++i) {
@@ -377,6 +379,7 @@ void MainWindow::updateNetworkPoses() {
   if(game.checkLoading()!=Gothic::LoadState::Idle || !world || status.snapshotState!="ready") return;
   try {
     if(status.role==Coop::Role::Host) {
+      auto story=networkStory();
       const std::array<Coop::WeaponEquipment,2> equipment = {world->playerById(1)->networkEquipment(),world->playerById(2)->networkEquipment()};
       const std::array<Coop::CombatState,2> progression = {world->playerById(1)->networkCombatState(),world->playerById(2)->networkCombatState()};
       const std::array<Coop::PlayerState,2> personal = {world->playerById(1)->networkPlayerState(),world->playerById(2)->networkPlayerState()};
@@ -396,7 +399,7 @@ void MainWindow::updateNetworkPoses() {
         if(previous==networkCombatSent.end() || previous->second!=next) npcs.push_back(std::move(next));
         }
       if(status.posesSent!=0 && status.poseTick==world->tickCount() && status.inputApplied==networkInstalledInput &&
-         !world->hasNetworkPickups() && equipment==networkEquipmentSent && progression==networkProgressSent && personal==networkPersonalSent && npcs.empty()) return;
+         !world->hasNetworkPickups() && equipment==networkEquipmentSent && progression==networkProgressSent && personal==networkPersonalSent && npcs.empty() && story.empty()) return;
       const auto revision = std::max(status.snapshotRevision,status.posesSent)+1;
       if(revision==0) throw std::runtime_error("Pose revision exhausted");
       while(status.inputApplied<networkInstalledInput)
@@ -412,6 +415,7 @@ void MainWindow::updateNetworkPoses() {
       poses.equipment = equipment;
       poses.progression = progression;
       poses.personal = personal;
+      poses.story = std::move(story);
       poses.npcs = std::move(npcs);
       if(!network.sendPoses(status.generation,revision,poses))
         throw std::runtime_error("Cannot queue authoritative poses");
@@ -450,6 +454,7 @@ void MainWindow::updateNetworkPoses() {
         }
       if(!world->applyNetworkInventory(poses.pickups,poses.equipment,poses.personal))
         throw std::runtime_error("Inventory update does not match the snapshot state");
+      if(!poses.story.empty()) applyNetworkStory(poses.story);
       for(size_t i=0;i<actors.size();++i) {
         actors[i]->applyNetworkCombatState(poses.progression[i]);
         actors[i]->applyNetworkPlayerState(poses.personal[i]);
@@ -474,4 +479,74 @@ void MainWindow::updateNetworkPoses() {
     Tempest::Log::e("Coop poses: ",error.what());
     network.invalidate("pose_apply_failed");
     }
+  }
+
+Coop::Bytes MainWindow::networkStory() {
+  auto world=Gothic::inst().world();
+  if(auto npc=dialogs.observation().npc; npc && !npc->isPlayer())
+    networkStoryNpc=world->objectId(npc);
+  Coop::Bytes bytes;
+  Tempest::MemWriter writer(bytes);
+  Serialize out(writer);
+  out.setEntry("story");
+  dialogs.saveNetwork(out);
+  world->script().saveQuests(out);
+  out.write(uint32_t(networkStoryNpc==0 ? 1 : 2));
+  const auto inventory=[&](const Npc& npc) {
+    out.write(world->objectId(&npc));
+    npc.inventory().save(out);
+    };
+  inventory(*world->playerById(1));
+  if(networkStoryNpc!=0) {
+    auto npc=world->npcByObjectId(world->objectRegistry().worldNamespace(),networkStoryNpc);
+    if(!npc) throw std::runtime_error("Dialogue actor no longer exists");
+    inventory(*npc);
+    }
+  if(out.currentEntryBytes().size()>1024*1024)
+    throw std::runtime_error("Story projection exceeds decompressed limit");
+  // Compare uncompressed content, not archive timestamps. Unchanged state sends
+  // nothing; ordered pose revisions make repeats/replays unable to grant rewards.
+  if(out.currentEntryBytes()==networkStorySent) { out.discard(); return {}; }
+  networkStorySent=out.currentEntryBytes();
+  out.finish();
+  if(bytes.size()>Coop::MaxStoryBytes) throw std::runtime_error("Story projection exceeds frame limit");
+  return bytes;
+  }
+
+void MainWindow::applyNetworkStory(const Coop::Bytes& bytes) {
+  // Check expansion before the archive reader allocates its entry buffer.
+  mz_zip_archive archive{};
+  if(!mz_zip_reader_init_mem(&archive,bytes.data(),bytes.size(),0))
+    throw std::runtime_error("Invalid story archive");
+  mz_zip_archive_file_stat stat{};
+  const bool valid=mz_zip_reader_get_num_files(&archive)==1 &&
+                   mz_zip_reader_file_stat(&archive,0,&stat) &&
+                   std::string_view(stat.m_filename)=="story" && stat.m_uncomp_size<=1024*1024;
+  mz_zip_reader_end(&archive);
+  if(!valid) throw std::runtime_error("Invalid story archive entry");
+  Tempest::MemReader reader(bytes);
+  Serialize in(reader);
+  in.setVersion(Serialize::Current);
+  in.setEntry("story");
+  auto world=Gothic::inst().world();
+  const bool wasActive=dialogs.isActive();
+  dialogs.applyNetwork(in);
+  if(!wasActive && dialogs.isActive()) {
+    clearInput();
+    inventory.close();
+    }
+  world->script().applyNetworkQuests(in);
+  uint32_t count=0;
+  in.read(count);
+  if(count==0 || count>world->npcCount()) throw std::runtime_error("Invalid story actor count");
+  std::set<uint64_t> seen;
+  for(uint32_t i=0;i<count;++i) {
+    uint64_t id=0;
+    in.read(id);
+    auto npc=world->npcByObjectId(world->objectRegistry().worldNamespace(),id);
+    if(!npc || (npc->isPlayer() && npc!=world->playerById(1)) || !seen.insert(id).second)
+      throw std::runtime_error("Invalid story inventory actor");
+    npc->applyNetworkInventory(in);
+    }
+  if(in.remainingBytes()!=0) throw std::runtime_error("Trailing story data");
   }

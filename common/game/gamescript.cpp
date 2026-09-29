@@ -576,10 +576,17 @@ void GameScript::saveQuests(Serialize &fout) {
   fout.write(gilAttitudes);
   }
 
+void GameScript::applyNetworkQuests(Serialize& fin) {
+  if(isAuthoritative()) throw std::runtime_error("Cannot replace authoritative quests");
+  dlgKnownInfos.clear();
+  loadQuests(fin);
+  }
+
 void GameScript::loadQuests(Serialize& fin) {
   quests.load(fin);
   uint32_t sz=0;
   fin.read(sz);
+  if(sz>fin.remainingBytes()/8) throw std::runtime_error("Invalid known-dialogue count");
   for(size_t i=0;i<sz;++i){
     uint32_t f=0,s=0;
     fin.read(f,s);

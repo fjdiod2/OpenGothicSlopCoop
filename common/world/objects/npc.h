@@ -349,6 +349,7 @@ class Npc final {
     zenkit::INpc&                        handle() { return *hnpc; }
     const std::shared_ptr<zenkit::INpc>& handlePtr() const { return hnpc; }
 
+    void      applyNetworkInventory(Serialize& fin);
     auto      inventory() const -> const Inventory& { return invent; }
     size_t    itemCount  (size_t id) const;
     Item*     activeWeapon();

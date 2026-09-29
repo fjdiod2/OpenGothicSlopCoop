@@ -41,7 +41,7 @@ Message input(uint64_t sequence=9) {
 
 // Independent literal from docs/coop-protocol.md, not constructed by the codec.
 Bytes goldenInput() {
-  return hex("4f4743500000004d00080003"
+  return hex("4f4743500000004d00090003"
              "0102030405060708" "0000000000000002"
              "0000000000000009" "0000000000000000"
              "00000081fffb0064" "0000000000000000" "0000000000000000" "000000000000000000");
@@ -109,7 +109,7 @@ void drain(Decoder& decoder, const std::vector<Message>& expected) {
 
 void pickupTransfers() {
   const Message request {4,2,9,0,Input{0,0,0,123,33}};
-  const auto literal = hex("4f4743500000004d00080003"
+  const auto literal = hex("4f4743500000004d00090003"
                            "0000000000000004" "0000000000000002"
                            "0000000000000009" "0000000000000000"
                            "0000000000000000" "000000000000007b" "0000000000000021" "000000000000000000");
@@ -153,7 +153,7 @@ void pickupTransfers() {
 
 void weaponEquipment() {
   const Message request {4,2,9,0,Input{0,0,0,0,0,101,1}};
-  const auto literal = hex("4f4743500000004d00080003"
+  const auto literal = hex("4f4743500000004d00090003"
                            "0000000000000004" "0000000000000002"
                            "0000000000000009" "0000000000000000"
                            "0000000000000000" "0000000000000000" "0000000000000000"
@@ -164,7 +164,7 @@ void weaponEquipment() {
   Message state {4,2,0,2,poses};
   const auto bytes = encode(state);
   const auto slots = hex("0000000000000065" "00000000000000c9" "000000000000012d" "0000000000000191");
-  REQUIRE(bytes.size()==2150 && std::equal(slots.begin(),slots.end(),bytes.begin()+1526));
+  REQUIRE(bytes.size()==2154 && std::equal(slots.begin(),slots.end(),bytes.begin()+1526));
   for(const auto& message:{request,state}) {
     const auto encoded = encode(message);
     for(size_t split=0; split<=encoded.size(); ++split) {
@@ -218,7 +218,7 @@ void consumables() {
     }
   // Literal tail checks talent/counter order and little-vs-big endian mistakes.
   auto bytes=encode(state);
-  const size_t personal=bytes.size()-PlayerStateBytes;
+  const size_t personal=bytes.size()-4-PlayerStateBytes;
   REQUIRE(bytes[personal+11*4+3]==1 && bytes[personal+22*4+7]==34);
   const auto literal=hex("0000000d0000005a0000000f00000000000000655a535f524947485448414e44");
   REQUIRE(std::equal(literal.begin(),literal.end(),bytes.begin()+std::ptrdiff_t(personal+44*4)));
@@ -236,23 +236,53 @@ void consumables() {
     if(fault==9) bad.personal[1].heldSlot="\t";
     error(ProtocolErrorCode::Fields,[&] { encode({4,2,0,2,bad}); });
     }
-  bytes.back()='A'; // Nonzero byte after the slot's zero padding.
+  bytes[bytes.size()-5]='A'; // Nonzero byte after the slot's zero padding.
   Decoder padding; error(ProtocolErrorCode::Fields,[&] { padding.feed(bytes); });
   // Repeated variable inventory frames must release their entire queue budget.
   Decoder stream;
   for(size_t i=0;i<2000;++i) { stream.feed(encode(state)); drain(stream,{state}); }
   }
 
+void storyProjection() {
+  auto poses=samplePoses();
+  poses.story={0,1,2,0xff,4};
+  Message message{4,2,0,2,poses};
+  const auto bytes=encode(message);
+  for(size_t split=0;split<=bytes.size();++split) {
+    Decoder decoder;
+    decoder.feed(std::span(bytes).first(split));
+    decoder.feed(std::span(bytes).subspan(split));
+    decoder.finish();
+    drain(decoder,{message});
+    REQUIRE(decoder.bufferedBytes()==0);
+    }
+  for(int fault=0;fault<3;++fault) {
+    auto bad=bytes;
+    if(fault==0) bad[bad.size()-poses.story.size()-1]++;
+    if(fault==1) bad[bad.size()-poses.story.size()-1]--;
+    if(fault==2) bad[bad.size()-poses.story.size()-4]=1;
+    Decoder decoder;
+    error(ProtocolErrorCode::Size,[&] { decoder.feed(bad); });
+    }
+  poses.story.resize(MaxStoryBytes+1);
+  error(ProtocolErrorCode::Size,[&] { encode({4,2,0,2,poses}); });
+  poses.story.resize(MaxStoryBytes);
+  message.payload=poses;
+  Decoder stream;
+  for(size_t i=0;i<100;++i) { stream.feed(encode(message)); drain(stream,{message}); }
+  REQUIRE(stream.bufferedBytes()==0);
+  }
+
 void golden() {
   const auto pose = encode({4,2,0,2,samplePoses()});
-  const auto prefix = hex("4f474350000008660008000b"
+  const auto prefix = hex("4f4743500000086a0009000b"
                           "0000000000000004" "0000000000000002"
                           "0000000000000000" "0000000000000002"
                           "000000000000007b" "0000000000000064" "0000000000000000"
                           "0000000000000001" "000000000000000b"
                           "3fa00000c02000004040000042b40000"
                           "00000000000000000000000000000000" "01535f52554e");
-  REQUIRE(pose.size()==2150 && std::equal(prefix.begin(),prefix.end(),pose.begin()));
+  REQUIRE(pose.size()==2154 && std::equal(prefix.begin(),prefix.end(),pose.begin()));
   const auto bytes = goldenInput();
   REQUIRE(bytes.size()==77);
   REQUIRE(encode(input())==bytes);
@@ -270,7 +300,7 @@ void combatState() {
   poses.npcs.push_back({pose,{{0,70,0,0,35,35,0,0},0,0,50,0,11,12,1,2}});
   Message message{4,2,0,2,poses};
   const auto bytes=encode(message);
-  REQUIRE(bytes.size()==2945);
+  REQUIRE(bytes.size()==2949);
   const auto literal=hex("00000025000000340000000a0000000a0000000f0000000c0000000000000000"
                          "000001f4000005dc000000010000000a000000000000002100000000000000210100");
   REQUIRE(std::equal(literal.begin(),literal.end(),bytes.begin()+1560));
@@ -321,7 +351,7 @@ void messageTypes() {
     }
   // A second literal covers the variable fingerprints and byte order of a
   // different message type, so matching encode/decode bugs cannot hide it.
-  const auto hello = hex("4f4743500000006c00080001"
+  const auto hello = hex("4f4743500000006c00090001"
                          "00000000000000000000000000000000"
                          "00000000000000000000000000000000"
                          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -410,7 +440,9 @@ void malformedHeader() {
     auto bytes = encode(message);
     if(std::holds_alternative<SnapshotChunk>(message.payload)) bytes[7] = 52; else
     ++bytes[7]; // Within the global cap, but wrong for this message schema.
-    bytes.resize(HeaderBytes);
+    if(std::holds_alternative<Poses>(message.payload)) {
+      bytes.push_back(0); // Variable story tail must be checked with its body.
+    } else bytes.resize(HeaderBytes);
     reject(bytes,ProtocolErrorCode::Size);
     const bool unbound = std::holds_alternative<Hello>(message.payload) ||
                          std::holds_alternative<Reject>(message.payload);
@@ -708,7 +740,7 @@ void malformedStress() {
 
 int main(int argc, char** argv) {
   const std::vector<std::pair<std::string,std::function<void()>>> cases = {
-    {"golden",golden},{"pickup-transfers",pickupTransfers},{"weapon-equipment",weaponEquipment},{"consumables",consumables},{"combat-state",combatState},{"message-types",messageTypes},{"fragments",fragments},
+    {"story-projection",storyProjection},{"golden",golden},{"pickup-transfers",pickupTransfers},{"weapon-equipment",weaponEquipment},{"consumables",consumables},{"combat-state",combatState},{"message-types",messageTypes},{"fragments",fragments},
     {"combined",combined},{"malformed-header",malformedHeader},{"malformed-payload",malformedPayload},
     {"encode-validation",encodeValidation},{"eof",eof},{"receive-limits",receiveLimits},
     {"write-limits",writeLimits},{"partial-writes",partialWrites},

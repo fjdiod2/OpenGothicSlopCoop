@@ -24,6 +24,8 @@ class DialogMenu : public Tempest::Widget {
     void clear();
 
     void onWorldChanged();
+    void saveNetwork(Serialize& out) const;
+    void applyNetwork(Serialize& in);
 
     bool isMobsiDialog() const;
     void dialogCamera(Camera& camera);
@@ -144,6 +146,7 @@ class DialogMenu : public Tempest::Widget {
     uint32_t                            depth=0;
     std::vector<uint32_t>               except;
 
+    bool                                replica=false, replicaChoices=false;
     State                               state=State::Idle;
     Entry                               current;
     Tempest::SoundEffect                currentSnd;

@@ -4951,3 +4951,9 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   if(syncAtt)
     visual.syncAttaches();
   }
+
+void Npc::applyNetworkInventory(Serialize& fin) {
+  if(world().isAuthoritative()) throw std::runtime_error("Cannot replace authoritative inventory");
+  invent = Inventory();
+  invent.load(fin,*this); // Allocates saved items; never evaluates their scripts.
+  }

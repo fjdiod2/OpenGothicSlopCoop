@@ -45,6 +45,7 @@ void QuestLog::save(Serialize &fout) {
 void QuestLog::load(Serialize &fin) {
   uint32_t sz=0;
   fin.read(sz);
+  if(sz>fin.remainingBytes()/10) throw std::runtime_error("Invalid quest count");
   quests.resize(sz);
 
   for(auto& i:quests){

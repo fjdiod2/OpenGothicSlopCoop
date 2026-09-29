@@ -70,6 +70,7 @@ class GameScript final {
     void         initDialogs();
     void         saveQuests(Serialize& fout);
     void         loadQuests(Serialize& fin);
+    void         applyNetworkQuests(Serialize& fin);
     void         saveVar(Serialize& fout);
     void         loadVar(Serialize& fin);
     void         savePerc(Serialize& fout);

@@ -126,6 +126,8 @@ class MainWindow : public Tempest::Window {
     void sendNetworkConsumable(size_t instance);
     void tickNetworkInput(bool apply = false);
     void updateNetworkPoses();
+    Coop::Bytes networkStory();
+    void applyNetworkStory(const Coop::Bytes& bytes);
     bool handleCoopFailure();
     bool handledCoopFailure = false;
     uint64_t discardedFailureInputs = 0;
@@ -141,6 +143,8 @@ class MainWindow : public Tempest::Window {
     std::array<Coop::PlayerState,2> networkPersonalSent;
     std::map<uint64_t,Coop::CombatNpc> networkCombatSent;
     size_t networkCombatCursor = 0;
+    Coop::Bytes networkStorySent;
+    uint64_t networkStoryNpc = 0;
     Coop::PoseInterpolation networkInterpolation;
 
     // Local, opt-in development interface; all commands run on the game thread.

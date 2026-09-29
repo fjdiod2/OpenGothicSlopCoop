@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <type_traits>
 #include <ctime>
+#include <stdexcept>
 
 #include <miniz.h>
 
@@ -50,6 +51,8 @@ class Serialize {
 
     // Explicit completion lets checkpoint writers report archive-finalization errors.
     void finish();
+    // Abandon a temporary projection whose uncompressed content is unchanged.
+    void discard();
 
     uint16_t version()              const { return wldVer; }
     void     setVersion(uint16_t v)       { wldVer = v;    }
@@ -74,6 +77,7 @@ class Serialize {
     // raw
     void writeBytes(const void* v,size_t sz);
     void readBytes (void* v,size_t sz);
+    const std::vector<uint8_t>& currentEntryBytes() const { return entryBuf; }
     size_t remainingBytes() const { return entryBuf.size()-size_t(readOffset); }
 
     template<class ... Arg>
@@ -177,6 +181,7 @@ class Serialize {
     void implRead (std::vector<bool>& s) {
       uint32_t sz=0;
       read(sz);
+      if(sz>remainingBytes()) throw std::runtime_error("Invalid collection length");
       s.resize(sz);
       for(size_t i=0; i<s.size(); ++i) {
         bool b=false;
@@ -204,6 +209,7 @@ class Serialize {
     void implReadVec(std::vector<T>& s,std::false_type) {
       uint32_t sz=0;
       read(sz);
+      if(sz>remainingBytes()) throw std::runtime_error("Invalid collection length");
       s.resize(sz);
       for(auto& i:s)
         read(i);
@@ -213,6 +219,8 @@ class Serialize {
     void implReadVec(std::vector<T>& s,std::true_type) {
       uint32_t sz=0;
       read(sz);
+      if(sz>remainingBytes()) throw std::runtime_error("Invalid collection length");
+      if(sz>remainingBytes()/sizeof(T)) throw std::runtime_error("Truncated vector");
       s.resize(sz);
       readBytes(s.data(),sz*sizeof(T));
       }
