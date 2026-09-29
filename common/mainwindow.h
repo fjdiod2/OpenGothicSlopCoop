@@ -161,6 +161,7 @@ class MainWindow : public Tempest::Window {
     std::optional<CheckpointBoundary> saveBoundary;
     bool returningFromSave = false;
     uint32_t testSaveDelayMs = 0;
+    uint64_t testWorldInitialBindings = 0;
     void beginQueuedSave();
     std::string loadStatus = "none";
     struct HudObservation {

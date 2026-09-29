@@ -806,7 +806,7 @@ void MainWindow::pollTestControl() {
     else if(action=="fixture_progression") {
       auto world = game.world();
       auto actor = world->playerById(testInputPlayer);
-      if(!world->isAuthoritative() || runtimeMode!=R_Suspended || network.status().bindings!=0 ||
+      if(!world->isAuthoritative() || runtimeMode!=R_Suspended || network.status().bindings!=testWorldInitialBindings ||
          network.status().boundPlayer!=0 || world->script().sharedXpEvents()!=0 || actor->isDown())
         throw std::runtime_error("Progression fixture requires a held, unconnected authoritative host before rewards");
       const auto integer = [&](const char* key, int min, int max) {
@@ -852,7 +852,7 @@ void MainWindow::pollTestControl() {
         }
       }
     else if(action=="fixture_consumables") {
-      if(!game.world()->isAuthoritative() || network.status().bindings!=0)
+      if(!game.world()->isAuthoritative() || network.status().bindings!=testWorldInitialBindings)
         throw std::runtime_error("Consumable fixture requires an unconnected authoritative host");
       if(cmd.HasMember("count") && (!cmd["count"].IsUint() || cmd["count"].GetUint()<1 || cmd["count"].GetUint()>3))
         throw std::runtime_error("Consumable fixture count must be between 1 and 3");

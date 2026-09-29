@@ -68,6 +68,9 @@ void MainWindow::rejoinNetwork() {
 void MainWindow::invalidateNetworkWorld() {
   // Fence the old lifetime before any owning world pointer is discarded.
   network.invalidate("world_replaced");
+  // Fixture setup is allowed before the first peer in this world lifetime.
+  // Keep the public connection counters cumulative across new games/loads.
+  testWorldInitialBindings = network.status().bindings;
   network.holdInput(false);
   clearInput();
   player.clearFocus();
