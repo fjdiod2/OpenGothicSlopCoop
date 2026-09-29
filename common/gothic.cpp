@@ -614,6 +614,10 @@ void Gothic::cancelLoading() {
     loaderTh.join();
     loadingFlag.store(LoadState::Idle);
     }
+  // A completed loader can leave a session which was never installed. Destroy
+  // it while Gothic and its settings signal still exist, rather than after
+  // ~Gothic clears the singleton during member destruction.
+  pendingGame.reset();
   }
 
 void Gothic::tick(uint64_t dt) {

@@ -554,14 +554,15 @@ void MainWindow::pollTestControl() {
       replyTestControl(testRequestId);
       return;
       }
-    if(game.checkLoading()!=Gothic::LoadState::Idle)
-      throw std::runtime_error("Game is loading or saving");
     if(action=="quit") {
-      clearInput();
+      if(game.checkLoading()==Gothic::LoadState::Idle)
+        clearInput();
       replyTestControl(testRequestId);
       SystemApi::exit();
       return;
       }
+    if(game.checkLoading()!=Gothic::LoadState::Idle)
+      throw std::runtime_error("Game is loading or saving");
     const bool reconnectKey = game.isGuest() && action=="key" && cmd.HasMember("key") &&
                               cmd["key"].IsString() && std::string_view(cmd["key"].GetString())=="R";
     if(!game.player() && action!="screenshot_ui" && action!="start_game" && !reconnectKey)
