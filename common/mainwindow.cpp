@@ -448,6 +448,7 @@ void MainWindow::keyDownEvent(KeyEvent &event) {
       rejoinNetwork();
       event.accept();
       }
+    else if(rootMenu.isActive()) { rootMenu.keyDownEvent(event); uiKeyUp=&rootMenu; }
     else if(Gothic::inst().isCoopFailed()) return;
     else if(inventory.isOpen()==InventoryMenu::State::Trade) inventory.keyDownEvent(event);
     else if(dialogs.isActive()) dialogs.keyDownEvent(event);
@@ -564,7 +565,18 @@ void MainWindow::keyRepeatEvent(KeyEvent& event) {
 
 void MainWindow::keyUpEvent(KeyEvent &event) {
   if(Gothic::inst().isGuest()) {
+    if(rootMenu.isActive() || uiKeyUp==&rootMenu) {
+      uiKeyUp=nullptr;
+      return;
+      }
     if(inventory.isActive()) inventory.keyUpEvent(event);
+    else if(!dialogs.isActive() && !Gothic::inst().isCoopFailed() &&
+            network.status().snapshotState=="ready" && keycodec.tr(event)==KeyCodec::Status) {
+      clearInput();
+      rootMenu.setMenu("MENU_STATUS",KeyCodec::Status);
+      rootMenu.setPlayer(*Gothic::inst().localPlayer());
+      rootMenu.showVersion(false);
+      }
     networkKey(event,false); return;
     }
   if(Gothic::inst().isCoopFailed() && !rootMenu.isActive()) {
@@ -1080,7 +1092,7 @@ void MainWindow::tickCamera(uint64_t dt) {
       }
     else if(pl!=nullptr && !camera.isFree()) {
       auto spin = camera.spin();
-      if(!Gothic::inst().isGuest() && pl->interactive()==nullptr && !pl->isDown())
+      if(pl->interactive()==nullptr && !pl->isDown())
         spin.y = pl->rotation();
       if(pl->isDive() && !camera.isMarvin())
         spin.x = -pl->rotationY();

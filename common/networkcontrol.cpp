@@ -208,6 +208,7 @@ void MainWindow::finishNetworkLoad(bool success) {
       selectLocalPlayer(PlayerIdentity::Companion);
       if(network.snapshotLoaded(networkLoadGeneration,networkLoadRevision)) {
         networkSnapshotTick = game.world()->tickCount();
+        setFocus(true); // Snapshot loading closed the waiting menu; restore gameplay mouse input.
         return;
         }
       }

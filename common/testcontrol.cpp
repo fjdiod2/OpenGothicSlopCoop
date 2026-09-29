@@ -342,6 +342,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       itemInfo(*it, it.count(),it.isEquipped(),it.slot());
     out.EndArray();
     out.Key("inventory_player_id"); out.Uint64(world->playerId(inventory.activePlayer()));
+    out.Key("gameplay_focus"); out.Bool(hasFocus());
     out.Key("inventory_trade"); out.Bool(inventory.isOpen()==InventoryMenu::State::Trade);
     out.Key("inventory_selling"); out.Bool(inventory.selling());
     out.Key("inventory_selected"); out.Uint64(inventory.selectedItemInstance());
@@ -616,7 +617,7 @@ void MainWindow::pollTestControl() {
         {"W",Event::K_W}, {"A",Event::K_A}, {"S",Event::K_S}, {"D",Event::K_D},
         {"SPACE",Event::K_Space}, {"CTRL",Event::K_LControl}, {"ALT",Event::K_LAlt},
         {"TAB",Event::K_Tab}, {"ESC",Event::K_ESCAPE}, {"ENTER",Event::K_Return},
-        {"F",Event::K_F}, {"B",Event::K_B}, {"R",Event::K_R}, {"Z",Event::K_Z}, {"X",Event::K_X}
+        {"C",Event::K_C}, {"Q",Event::K_Q}, {"E",Event::K_E}, {"F",Event::K_F}, {"B",Event::K_B}, {"R",Event::K_R}, {"Z",Event::K_Z}, {"X",Event::K_X}
         };
       for(auto name:names) {
         auto found = Event::K_NoKey;
