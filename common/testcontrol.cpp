@@ -273,6 +273,12 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       out.Key("hp"); out.Int(actor->attribute(ATR_HITPOINTS));
       out.Key("hp_max"); out.Int(actor->attribute(ATR_HITPOINTSMAX));
       combatInfo(*actor);
+      out.Key("talent_skills"); out.StartArray();
+      for(int i=0;i<TALENT_MAX_G2;++i) out.Int(actor->talentSkill(Talent(i)));
+      out.EndArray();
+      out.Key("talent_values"); out.StartArray();
+      for(int i=0;i<TALENT_MAX_G2;++i) out.Int(actor->talentValue(Talent(i)));
+      out.EndArray();
       out.Key("camera_bone"); vec(actor->cameraBone(game.camera()->isFirstPerson()));
       out.Key("head_bone"); vec(actor->cameraBone(true));
       Vec3 eye(0,0,20);
@@ -614,6 +620,54 @@ void MainWindow::pollTestControl() {
         throw std::runtime_error("Expected initial LP in 0..1000 on an unconnected host");
       game.world()->playerById(testInputPlayer)->handle().lp=cmd["lp"].GetInt();
       }
+    else if(action=="fixture_progression") {
+      auto world = game.world();
+      auto actor = world->playerById(testInputPlayer);
+      if(!world->isAuthoritative() || runtimeMode!=R_Suspended || network.status().bindings!=0 ||
+         network.status().boundPlayer!=0 || world->script().sharedXpEvents()!=0 || actor->isDown())
+        throw std::runtime_error("Progression fixture requires a held, unconnected authoritative host before rewards");
+      const auto integer = [&](const char* key, int min, int max) {
+        if(!cmd.HasMember(key) || !cmd[key].IsInt() || cmd[key].GetInt()<min || cmd[key].GetInt()>max)
+          throw std::runtime_error(std::string("Invalid initial progression field: ")+key);
+        return cmd[key].GetInt();
+        };
+      const int xp = integer("xp",0,10000000), next = integer("xp_next",1,10000000);
+      const int level = integer("level",0,1000), lp = integer("lp",0,1000);
+      if(xp>=next) throw std::runtime_error("Initial XP must be below the next threshold");
+      std::array<int32_t,8> attributes;
+      if(!cmd.HasMember("attributes") || !cmd["attributes"].IsArray() || cmd["attributes"].Size()!=attributes.size())
+        throw std::runtime_error("Expected eight initial attributes");
+      for(size_t i=0;i<attributes.size();++i) {
+        const auto& value = cmd["attributes"][rapidjson::SizeType(i)];
+        if(!value.IsInt() || value.GetInt()<0 || value.GetInt()>10000)
+          throw std::runtime_error("Expected initial attributes in 0..10000");
+        attributes[i] = value.GetInt();
+        }
+      if(attributes[ATR_HITPOINTS]<1 || attributes[ATR_HITPOINTS]>attributes[ATR_HITPOINTSMAX] ||
+         attributes[ATR_MANA]>attributes[ATR_MANAMAX])
+        throw std::runtime_error("Invalid initial HP/mana limits");
+      if(!cmd.HasMember("talents") || !cmd["talents"].IsArray() || cmd["talents"].Size()>TALENT_MAX_G2)
+        throw std::runtime_error("Expected initial talent triples: ID, skill, value");
+      std::array<bool,TALENT_MAX_G2> seen = {};
+      for(const auto& talent:cmd["talents"].GetArray()) {
+        if(!talent.IsArray() || talent.Size()!=3 || !talent[0].IsInt() || !talent[1].IsInt() || !talent[2].IsInt() ||
+           talent[0].GetInt()<0 || talent[0].GetInt()>=TALENT_MAX_G2 ||
+           talent[1].GetInt()<0 || talent[1].GetInt()>6 || talent[2].GetInt()<0 || talent[2].GetInt()>100)
+          throw std::runtime_error("Invalid initial talent triple");
+        auto& present = seen[size_t(talent[0].GetInt())];
+        if(present) throw std::runtime_error("Duplicate initial talent ID");
+        present = true;
+        }
+      // Setup only: validate the entire request before modifying either actor.
+      // Normal combat and the installed scripts must produce every tested reward.
+      auto& data = actor->handle();
+      data.exp=xp; data.exp_next=next; data.level=level; data.lp=lp;
+      std::copy(attributes.begin(),attributes.end(),data.attribute);
+      for(const auto& talent:cmd["talents"].GetArray()) {
+        actor->setTalentSkill(Talent(talent[0].GetInt()),talent[1].GetInt());
+        actor->setTalentValue(Talent(talent[0].GetInt()),talent[2].GetInt());
+        }
+      }
     else if(action=="fixture_weapons") {
       if(!game.world()->isAuthoritative()) throw std::runtime_error("Guest cannot create weapon fixture");
       auto npc = game.world()->playerById(testInputPlayer);
@@ -684,8 +738,8 @@ void MainWindow::pollTestControl() {
         }
       int level = -1;
       if(cmd.HasMember("level")) {
-        if(!cmd["level"].IsInt() || cmd["level"].GetInt()<1 || cmd["level"].GetInt()>100)
-          throw std::runtime_error("Expected monster fixture level in 1..100");
+        if(!cmd["level"].IsInt() || cmd["level"].GetInt()<1 || cmd["level"].GetInt()>1000)
+          throw std::runtime_error("Expected monster fixture level in 1..1000");
         level = cmd["level"].GetInt();
         }
       float distance = 150.f;
