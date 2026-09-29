@@ -170,6 +170,23 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
     auto vec = [&](const Vec3& v) {
       out.StartArray(); out.Double(v.x); out.Double(v.y); out.Double(v.z); out.EndArray();
       };
+    auto combatInfo = [&](const Npc& actor) {
+      out.Key("dead"); out.Bool(actor.isDead());
+      out.Key("unconscious"); out.Bool(actor.isUnconscious());
+      out.Key("weapon_state"); out.Int(int(actor.weaponState()));
+      out.Key("level"); out.Int(actor.level());
+      out.Key("xp"); out.Int(actor.experience());
+      out.Key("xp_next"); out.Int(actor.experienceNext());
+      out.Key("lp"); out.Int(actor.learningPoints());
+      out.Key("last_hit_id"); out.Uint64(world->objectId(actor.lastHitNpc()));
+      out.Key("target_id"); out.Uint64(world->objectId(actor.target()));
+      };
+    out.Key("combat_constants"); out.StartObject();
+    for(const auto name : {"XP_PER_VICTORY", "HP_PER_LEVEL", "LP_PER_LEVEL"}) {
+      out.Key(name);
+      if(auto sym = world->script().findSymbol(name)) out.Int(sym->get_int()); else out.Null();
+      }
+    out.EndObject();
     out.Key("story_player_id"); out.Uint64(world->playerId(npc));
     out.Key("local_player_id"); out.Uint64(game.localPlayerId());
     out.Key("input_player_id"); out.Uint64(world->playerId(player.controlledPlayer()));
@@ -238,6 +255,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       out.EndArray();
       out.Key("hp"); out.Int(actor->attribute(ATR_HITPOINTS));
       out.Key("hp_max"); out.Int(actor->attribute(ATR_HITPOINTSMAX));
+      combatInfo(*actor);
       out.Key("camera_bone"); vec(actor->cameraBone(game.camera()->isFirstPerson()));
       out.Key("head_bone"); vec(actor->cameraBone(true));
       Vec3 eye(0,0,20);
@@ -249,6 +267,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       auto focusedItem = actorFocus.item ? world->script().findSymbol(actorFocus.item->clsId()) : nullptr;
       str(focusedItem ? focusedItem->name() : "");
       out.Key("focus_item_id"); out.Uint64(actorFocus.item ? world->objectId(actorFocus.item) : 0);
+      out.Key("focus_npc_id"); out.Uint64(actorFocus.npc ? world->objectId(actorFocus.npc) : 0);
       const auto equipment = actor->networkEquipment();
       const auto views = actor->networkWeaponViews();
       out.Key("equipment"); out.StartObject();
@@ -261,6 +280,26 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       for(auto it=actor->inventory().iterator(Inventory::T_Inventory); it.isValid(); ++it)
         itemInfo(*it,it.count(),it.isEquipped(),it.slot());
       out.EndArray();
+      out.EndObject();
+      }
+    out.EndArray();
+    out.Key("nearby_npcs"); out.StartArray();
+    for(uint32_t i=0; i<world->npcCount(); ++i) {
+      const auto other = world->npcById(i);
+      if(!other || world->playerId(other)!=0) continue;
+      bool nearby = false;
+      for(const auto& entry:world->players())
+        nearby |= other->qDistTo(*entry.second)<2000.f*2000.f;
+      if(!nearby) continue;
+      out.StartObject();
+      out.Key("object_id"); out.Uint64(world->objectId(other));
+      const auto symbol = world->script().findSymbol(other->instanceSymbol());
+      out.Key("symbol"); str(symbol ? symbol->name() : "");
+      out.Key("position"); vec(other->position());
+      out.Key("rotation"); out.Double(other->rotation());
+      out.Key("hp"); out.Int(other->attribute(ATR_HITPOINTS));
+      out.Key("hp_max"); out.Int(other->attribute(ATR_HITPOINTSMAX));
+      combatInfo(*other);
       out.EndObject();
       }
     out.EndArray();
@@ -549,6 +588,86 @@ void MainWindow::pollTestControl() {
         auto cls = game.world()->script().findSymbolIndex(symbol);
         if(cls==size_t(-1)) throw std::runtime_error("Missing weapon fixture instance");
         npc->addItem(cls,std::string_view(symbol)=="ITMW_1H_VLK_DAGGER" ? 2 : 1);
+        }
+      }
+    else if(action=="fixture_combat_position") {
+      auto world = game.world();
+      if(!world->isAuthoritative()) throw std::runtime_error("Guest cannot position combat fixture");
+      if(!cmd.HasMember("namespace") || !cmd["namespace"].IsUint64() ||
+         !cmd.HasMember("object_id") || !cmd["object_id"].IsUint64() ||
+         !cmd.HasMember("distance") || !cmd["distance"].IsNumber() ||
+         !cmd.HasMember("bearing") || !cmd["bearing"].IsNumber())
+        throw std::runtime_error("Expected NPC identity, distance and bearing");
+      auto target = world->npcByObjectId(cmd["namespace"].GetUint64(),cmd["object_id"].GetUint64());
+      auto actor = world->playerById(testInputPlayer);
+      const double distance = cmd["distance"].GetDouble(), bearing = cmd["bearing"].GetDouble();
+      if(!target || target==actor || actor->isDown() || !std::isfinite(distance) ||
+         distance<80 || distance>1000 || !std::isfinite(bearing) || bearing<-360 || bearing>360)
+        throw std::runtime_error("Invalid combat fixture position");
+      auto pos = target->position()+Vec3(float(distance*std::cos(bearing*M_PI/180.0)),0,
+                                       float(distance*std::sin(bearing*M_PI/180.0)));
+      const auto ground = world->physic()->landRay(pos+Vec3(0,200,0),400);
+      if(!ground.hasCol) throw std::runtime_error("No ground for combat fixture position");
+      pos.y = ground.v.y;
+      clearInput();
+      actor->stopWalking();
+      if(!actor->setPosition(pos)) throw std::runtime_error("Cannot position combat fixture player");
+      actor->setDirection(target->position()-pos);
+      }
+    else if(action=="fixture_monster") {
+      auto world = game.world();
+      if(!world->isAuthoritative()) throw std::runtime_error("Guest cannot create monster fixture");
+      if(!cmd.HasMember("mode") || !cmd["mode"].IsString())
+        throw std::runtime_error("Expected calm or aggressive monster mode");
+      const std::string_view mode = cmd["mode"].GetString();
+      if(mode!="calm" && mode!="aggressive")
+        throw std::runtime_error("Expected calm or aggressive monster mode");
+      // The fixed scavenger fixture has 70 maximum HP in the installed scripts.
+      // Lower starting health shortens tests; combat must still cause all damage.
+      int hp = 20;
+      if(cmd.HasMember("hp")) {
+        if(!cmd["hp"].IsInt() || cmd["hp"].GetInt()<1 || cmd["hp"].GetInt()>70)
+          throw std::runtime_error("Expected monster starting HP in 1..70");
+        hp = cmd["hp"].GetInt();
+        }
+      float distance = 150.f;
+      if(cmd.HasMember("distance")) {
+        if(!cmd["distance"].IsNumber() || !std::isfinite(cmd["distance"].GetDouble()) ||
+           cmd["distance"].GetDouble()<80 || cmd["distance"].GetDouble()>1000)
+          throw std::runtime_error("Expected monster distance in 80..1000 world units");
+        distance = float(cmd["distance"].GetDouble());
+        }
+      auto actor = world->playerById(testInputPlayer);
+      if(actor->isDown()) throw std::runtime_error("Monster fixture requires a standing player");
+      const auto cls = world->script().findSymbolIndex("SCAVENGER");
+      const auto attack = world->script().findSymbolIndex("ZS_MM_ATTACK");
+      if(cls==size_t(-1) || attack==size_t(-1))
+        throw std::runtime_error("Missing original monster fixture scripts");
+      auto pos = actor->position();
+      pos.x += distance*std::cos(actor->rotationRad());
+      pos.z += distance*std::sin(actor->rotationRad());
+      const auto ground = world->physic()->landRay(pos+Vec3(0,200,0),400);
+      if(!ground.hasCol) throw std::runtime_error("No ground for monster fixture");
+      pos.y = ground.v.y;
+      auto monster = world->addNpc(cls,pos);
+      if(!monster) throw std::runtime_error("Cannot create monster fixture");
+      monster->changeAttribute(ATR_HITPOINTS,std::min(hp,monster->attribute(ATR_HITPOINTSMAX))-
+                              monster->attribute(ATR_HITPOINTS),false);
+      monster->setDirection(actor->position()-pos);
+      // Setup only. Keep normal collision, animation hits, HP, death and reward
+      // scripts. A calm target has no routine/perceptions that can retaliate.
+      if(mode=="calm") {
+        monster->clearState(true);
+        monster->clearAiQueue();
+        monster->handle().start_aistate = 0;
+        for(int i=1; i<PERC_Count; ++i) monster->setPerceptionDisable(PercType(i));
+        }
+      else {
+        // Choose the initial opponent, then let the original combat AI decide
+        // how to move/attack. This does not test autonomous target acquisition.
+        monster->setTarget(actor);
+        monster->setOther(actor);
+        monster->startState(ScriptFn(attack),"");
         }
       }
     else if(action=="remove_world_item") {

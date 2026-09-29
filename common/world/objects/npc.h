@@ -405,6 +405,7 @@ class Npc final {
 
     void      clearNearestEnemy();
     int32_t   lastHitSpellId() const { return lastHitSpell; }
+    const Npc* lastHitNpc() const { return lastHit; }
 
     void      setOther(Npc* ot);
     void      setVictim(Npc* ot);
