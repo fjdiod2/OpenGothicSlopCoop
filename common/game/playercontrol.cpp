@@ -78,6 +78,16 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
   if(w!=nullptr && w->isCutsceneLock())
     return;
 
+  if(a==Action::ActionGeneric && !ctrl[a] && pl && w->players().size()>1) {
+    // Retain the local player's item intent across other players' actions in
+    // this simulation step. A removed target must never become a new target.
+    pickupWorld = pickupItem = 0;
+    if(auto item = findFocus(nullptr).item) {
+      pickupWorld = w->objectRegistry().worldNamespace();
+      pickupItem = w->objectId(item);
+      }
+    }
+
   handleMovementAction(KeyCodec::ActionMapping{a,mapping}, true);
 
   if(pl!=nullptr && pl->interactive()!=nullptr && c!=nullptr && !c->isFree()) {
@@ -225,6 +235,7 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
 void PlayerControl::onKeyReleased(KeyCodec::Action a, KeyCodec::Mapping mapping) {
   if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   ctrl[a] = false;
+  if(a==Action::ActionGeneric) pickupWorld = pickupItem = 0;
 
   handleMovementAction(KeyCodec::ActionMapping{a, mapping}, false);
 
@@ -302,6 +313,13 @@ void PlayerControl::tickFocus() {
 
   if(!ctrl[Action::ActionGeneric])
     return;
+
+  if(pickupItem!=0) {
+    pickupObject(pickupWorld,pickupItem);
+    clearInput(); // Successful or rejected: one press consumes one fixed intent.
+    clearFocus();
+    return;
+    }
 
   auto focus = currentFocus;
   if(focus.interactive!=nullptr && interact(*focus.interactive)) {
@@ -484,6 +502,7 @@ bool PlayerControl::canInteract() const {
   }
 
 void PlayerControl::clearInput() {
+  pickupWorld = pickupItem = 0;
   rotMouse = rotMouseY = 0;
   movement.reset();
   std::memset(ctrl, 0,sizeof(ctrl));

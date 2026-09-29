@@ -437,6 +437,12 @@ void MainWindow::pollTestControl() {
       clearInput();
       runtimeMode = cmd["hold"].GetBool() ? R_Suspended : R_Normal;
       }
+    else if(action=="step_simulation") {
+      if(!game.world()->isAuthoritative() || runtimeMode!=R_Suspended)
+        throw std::runtime_error("Step requires a held authoritative simulation");
+      // One ordinary simulation/controller step, retaining queued real input.
+      runtimeMode = R_Step;
+      }
     else if(action=="campaign_probe") {
       // Read-only diagnostic archive, not a loadable/saveable guest checkpoint.
       const auto output = fs::path(testControlDir)/("campaign-"+testRequestId+".zip");
@@ -503,6 +509,23 @@ void MainWindow::pollTestControl() {
       const auto cls = game.world()->script().findSymbolIndex("ITPL_HEALTH_HERB_01");
       if(cls==size_t(-1) || !game.world()->addItem(cls,pos))
         throw std::runtime_error("Cannot create plant fixture");
+      }
+    else if(action=="fixture_shared_plants") {
+      auto first = game.world()->playerById(1);
+      auto second = game.world()->playerById(2);
+      if(!game.world()->isAuthoritative() || !first || !second)
+        throw std::runtime_error("Shared fixture requires two authoritative players");
+      const auto cls = game.world()->script().findSymbolIndex("ITPL_HEALTH_HERB_01");
+      for(const auto distance : {150.f,190.f}) {
+        auto pos = (first->position()+second->position())*0.5f;
+        pos.x += distance*std::cos(first->rotationRad());
+        pos.z += distance*std::sin(first->rotationRad());
+        auto ground = game.world()->physic()->landRay(pos+Vec3(0,200,0),400);
+        if(!ground.hasCol) throw std::runtime_error("No ground for shared plant fixture");
+        pos.y = ground.v.y+5.f;
+        if(cls==size_t(-1) || !game.world()->addItem(cls,pos))
+          throw std::runtime_error("Cannot create shared plant fixture");
+        }
       }
     else if(action=="remove_world_item") {
       if(!cmd.HasMember("object_id") || !cmd["object_id"].IsUint64() ||

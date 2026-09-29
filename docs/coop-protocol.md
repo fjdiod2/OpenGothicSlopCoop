@@ -363,6 +363,44 @@ finite floats are validated. This lets the guest select targets without script
 constructors. Older host checkpoints without the entry remain readable and
 regenerate definitions normally; their fresh network snapshot includes it.
 
+### Competing pickup arbitration (G02)
+
+The first valid pickup processed by the authoritative game thread wins. Its
+normal world removal tombstones the item immediately, before the next contender
+can resolve it. A loser gets no transfer or inventory addition. There is no
+reservation, rollback or client-time fairness policy. Currently queued guest
+inputs are processed before the host's local controller in a simulation step;
+a guest request arriving after a host pickup loses. Both orderings are tested.
+
+The local co-op controller now retains the typed item/world selected on the
+initial generic-action key press. The next interaction step consumes that exact
+intent whether it succeeds or fails, and clears it on release/input reset.
+Without this, the host could target the next nearby item after the guest took
+the original. The losing action must not become a pickup of that second item,
+or a different interaction. Ordinary single-player targeting is unchanged.
+The guest already sends an explicit typed target through the G01 input stream.
+A new deliberate action can select another remaining item normally.
+
+Retransmitting an accepted input sequence is discarded before gameplay; an old
+generation cannot claim a live item. A new sequence naming the removed ID also
+fails, even when a different live item now occupies its old runtime-array slot.
+A duplicate successful pose/transfer revision fails the guest's ordering check
+without applying the transaction twice. Recovery uses a fresh host snapshot.
+Saving the result persists the winner's inventory, the loser unchanged, and the
+single tombstone; restart/rejoin never replays the old pending intent. No wire
+or checkpoint format changes are needed: versions remain **5/56**.
+
+Parent runner `competing-pickups` uses real generic-action keys and a transparent
+TCP frame relay. Two plants start within both actors' normal focus range. The
+test holds simulation to queue both contenders, advances one ordinary engine
+step, exercises each winner, then checks one transfer, one addition and one
+removal. It verifies array compaction leaves the second item live, duplicate and
+stale request rejection, fresh sequences with a removed/wrong-world/NPC target,
+replayed result rejection, and save/restart/fresh join for both outcomes. A later
+explicit pickup proves the remaining item still works, including a 1→2 stack
+merge. `fixture_shared_plants` only creates world items; `step_simulation` only
+advances the ordinary controller/simulation path from a held test runtime.
+
 ### PoseAck and presentation
 
 `PoseAck` has no body. The header identifies the generation, binding and revision

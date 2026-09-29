@@ -147,6 +147,7 @@ class PlayerControl final {
 
     bool           cacheFocus=false;
     Focus          currentFocus;
+    uint64_t       pickupWorld=0, pickupItem=0;
     float          rotMouse=0;
     float          rotMouseY=0;
     bool           casting = false;
