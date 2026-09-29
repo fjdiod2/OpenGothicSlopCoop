@@ -345,20 +345,33 @@ void MainWindow::resizeEvent(SizeEvent&) {
 
 void MainWindow::mouseDownEvent(MouseEvent &event) {
   if(Gothic::inst().isCoopFailed()) return;
-  if(event.button<sizeof(mouseP))
+  if(Gothic::inst().isGuest() && (rootMenu.isActive() || dialogs.isActive() || inventory.isActive() || video.isActive()))
+    return; // Unhandled UI clicks must not become gameplay intents.
+  const bool pressed=event.button<std::size(mouseP) && !mouseP[event.button];
+  if(event.button<std::size(mouseP))
     mouseP[event.button]=true;
+  if(Gothic::inst().isGuest()) {
+    networkAction(keycodec.tr(event),pressed);
+    event.accept();
+    return;
+    }
   auto act     = keycodec.tr(event);
   auto mapping = keycodec.mapping(event);
   player.onKeyPressed(act,KeyEvent::K_NoKey,mapping);
   }
 
 void MainWindow::mouseUpEvent(MouseEvent &event) {
+  if(event.button<std::size(mouseP))
+    mouseP[event.button]=false;
   if(Gothic::inst().isCoopFailed()) return;
+  if(Gothic::inst().isGuest()) {
+    networkAction(keycodec.tr(event),false);
+    event.accept();
+    return;
+    }
   auto act     = keycodec.tr(event);
   auto mapping = keycodec.mapping(event);
   player.onKeyReleased(act,mapping);
-  if(event.button<sizeof(mouseP))
-    mouseP[event.button]=false;
   }
 
 void MainWindow::mouseDragEvent(MouseEvent &event) {
@@ -571,9 +584,11 @@ void MainWindow::keyUpEvent(KeyEvent &event) {
       }
     if(inventory.isActive()) inventory.keyUpEvent(event);
     else if(!dialogs.isActive() && !Gothic::inst().isCoopFailed() &&
-            network.status().snapshotState=="ready" && keycodec.tr(event)==KeyCodec::Status) {
+            network.status().snapshotState=="ready" &&
+            (keycodec.tr(event)==KeyCodec::Status || keycodec.tr(event)==KeyCodec::Log)) {
       clearInput();
-      rootMenu.setMenu("MENU_STATUS",KeyCodec::Status);
+      const auto action=keycodec.tr(event);
+      rootMenu.setMenu(action==KeyCodec::Status ? "MENU_STATUS" : "MENU_LOG",action);
       rootMenu.setPlayer(*Gothic::inst().localPlayer());
       rootMenu.showVersion(false);
       }

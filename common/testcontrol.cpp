@@ -617,7 +617,7 @@ void MainWindow::pollTestControl() {
         {"W",Event::K_W}, {"A",Event::K_A}, {"S",Event::K_S}, {"D",Event::K_D},
         {"SPACE",Event::K_Space}, {"CTRL",Event::K_LControl}, {"ALT",Event::K_LAlt},
         {"TAB",Event::K_Tab}, {"ESC",Event::K_ESCAPE}, {"ENTER",Event::K_Return},
-        {"C",Event::K_C}, {"Q",Event::K_Q}, {"E",Event::K_E}, {"F",Event::K_F}, {"B",Event::K_B}, {"R",Event::K_R}, {"Z",Event::K_Z}, {"X",Event::K_X}
+        {"L",Event::K_L}, {"N",Event::K_N}, {"C",Event::K_C}, {"Q",Event::K_Q}, {"E",Event::K_E}, {"F",Event::K_F}, {"B",Event::K_B}, {"R",Event::K_R}, {"Z",Event::K_Z}, {"X",Event::K_X}
         };
       for(auto name:names) {
         auto found = Event::K_NoKey;
@@ -642,6 +642,17 @@ void MainWindow::pollTestControl() {
       if(!cmd.HasMember("player"))
         throw std::runtime_error("Expected a local player identity");
       selectLocalPlayer(testInputPlayer);
+      }
+    else if(action=="mouse_button") {
+      if(testInputPlayer!=game.localPlayerId() || !cmd.HasMember("down") || !cmd["down"].IsBool() ||
+         !cmd.HasMember("button") || !cmd["button"].IsString())
+        throw std::runtime_error("Expected local mouse button and down boolean");
+      const std::string_view name=cmd["button"].GetString();
+      const auto button=name=="LEFT" ? Event::ButtonLeft : name=="RIGHT" ? Event::ButtonRight : Event::ButtonNone;
+      if(button==Event::ButtonNone) throw std::runtime_error("Unsupported mouse button");
+      const bool down=cmd["down"].GetBool();
+      MouseEvent event(w()/2,h()/2,button,Event::M_NoModifier,0,0,down ? Event::MouseDown : Event::MouseUp);
+      if(down) mouseDownEvent(event); else mouseUpEvent(event);
       }
     else if(action=="mouse") {
       if(testInputPlayer!=game.localPlayerId() || !cmd.HasMember("dx") || !cmd.HasMember("dy") ||

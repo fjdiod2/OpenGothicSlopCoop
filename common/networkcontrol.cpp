@@ -242,14 +242,26 @@ void MainWindow::networkKey(Tempest::KeyEvent& event, bool down) {
   if(std::none_of(std::begin(networkActions),std::end(networkActions),[&](const auto& a) { return a.first==action; })) return;
   const bool pressed = down && networkKeys.find(event.key)==networkKeys.end();
   if(down) networkKeys.insert(event.key); else networkKeys.erase(event.key);
+  networkAction(action,pressed);
+  event.accept();
+  }
+
+void MainWindow::networkAction(KeyCodec::Action action, bool pressed) {
+  auto& game = Gothic::inst();
+  if(game.isCoopFailed() || network.status().snapshotState!="ready" || game.checkLoading()!=Gothic::LoadState::Idle ||
+     game.localPlayerId()!=PlayerIdentity::Companion) return;
+  if(action==KeyCodec::Weapon) action=KeyCodec::WeaponMele;
   uint32_t buttons = 0;
   bool interacting = false;
-  for(auto key:networkKeys) {
-    const Tempest::KeyEvent held(key);
-    interacting |= mapped(held)==KeyCodec::ActionGeneric;
+  const auto heldAction = [&](KeyCodec::Action held) {
+    if(held==KeyCodec::Weapon) held=KeyCodec::WeaponMele;
+    interacting |= held==KeyCodec::ActionGeneric;
     for(const auto& [a,bit]:networkActions)
-      if(mapped(held)==a) buttons |= bit;
-    }
+      if(held==a) buttons |= bit;
+    };
+  for(auto key:networkKeys) heldAction(keycodec.tr(Tempest::KeyEvent(key)));
+  for(size_t button=0;button<std::size(mouseP);++button)
+    if(mouseP[button]) heldAction(keycodec.tr(Tempest::MouseEvent(0,0,Tempest::Event::MouseButton(button))));
   const auto ws=game.localPlayer()->weaponState();
   const bool melee=ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H;
   if(!melee) {
@@ -269,14 +281,13 @@ void MainWindow::networkKey(Tempest::KeyEvent& event, bool down) {
     input.dialogueAction=1; input.dialogueWorld=game.world()->objectRegistry().worldNamespace();
     input.dialogueTarget=game.world()->objectId(npc);
     if(!network.sendInput(input)) network.invalidate("input_queue_full");
-    event.accept(); return;
+    return;
     }
   if(buttons!=networkButtons || item) {
     networkButtons = buttons;
     sendNetworkInput(0,0,item ? game.world()->objectRegistry().worldNamespace() : 0,
                          item ? game.world()->objectId(item) : 0);
     }
-  event.accept();
   }
 
 void MainWindow::sendNetworkInput(int x, int y, uint64_t pickupWorld, uint64_t pickupItem) {

@@ -121,6 +121,7 @@ class MainWindow : public Tempest::Window {
     std::string networkSnapshotArtifact;
     void finishNetworkLoad(bool success);
     void networkKey(Tempest::KeyEvent& event, bool down);
+    void networkAction(KeyCodec::Action action, bool pressed);
     void sendNetworkInput(int x=0, int y=0, uint64_t pickupWorld=0, uint64_t pickupItem=0);
     void sendNetworkEquipment(size_t instance, bool equipped);
     void sendNetworkConsumable(size_t instance);

@@ -1232,6 +1232,13 @@ silently truncating the journal or inventories.
 
 ## Guest-initiated host-story dialogue (G09)
 
+Both the mapped keyboard action and mapped mouse button produce the same open
+intent below. Mouse clicks never execute the guest's local gameplay controller.
+Held keyboard and mouse actions are merged before producing the button mask;
+releasing one binding preserves another held binding of that action. UI clicks
+must not fall through into gameplay intents. The guest journal is a local view
+of the replicated shared quest log and does not send a new protocol message.
+
 `Input` appends these fields after the equipment action at offset 76. All use the
 outer big-endian format and the same contiguous input sequence as movement.
 
