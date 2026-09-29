@@ -16,7 +16,7 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 5;
+inline constexpr uint16_t ProtocolVersion = 6;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
@@ -61,6 +61,8 @@ struct Input {
   uint32_t buttons = 0;
   int16_t  lookX = 0, lookY = 0;
   uint64_t pickupWorld = 0, pickupItem = 0; // Both zero, or one explicit item request.
+  uint64_t equipmentItem = 0; // Inventory instance + 1; zero means no equipment intent.
+  uint8_t  equipmentAction = 0; // 0 none, 1 equip, 2 unequip. Desired state, not toggle.
   bool operator==(const Input&) const = default;
   };
 struct StateAck {
@@ -105,9 +107,14 @@ struct Pickup {
   uint64_t amount = 0, before = 0, after = 0;
   bool operator==(const Pickup&) const = default;
   };
+struct WeaponEquipment {
+  uint64_t melee = 0, ranged = 0; // Instance + 1, or zero for an empty slot.
+  bool operator==(const WeaponEquipment&) const = default;
+  };
 struct Poses {
   uint64_t world = 0, tick = 0, appliedInput = 0;
   std::array<ActorPose,2> actors;
+  std::array<WeaponEquipment,2> equipment;
   std::vector<Pickup> pickups; // Ordered, atomic transfers at this revision.
   bool operator==(const Poses&) const = default;
   };

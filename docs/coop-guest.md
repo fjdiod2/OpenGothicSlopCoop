@@ -1,9 +1,9 @@
-# Guest authority (N07–G01)
+# Guest authority (N07–G03)
 
 The campaign is simulated and saved by the host. `-coop-join 127.0.0.1:PORT`
 selects guest mode for the process, including before a world exists and after
 connection refusal, timeout or disconnect. The guest does not become a host if
-its connection fails. G01 uses wire version 5 and checkpoint version 56.
+its connection fails. G03 uses wire version 6 and checkpoint version 56.
 
 ## Loading
 
@@ -47,14 +47,16 @@ effect ticks. Gameplay animation events and root-motion integration remain in
 the authoritative NPC tick.
 
 The main window keeps rendering and camera mouse/zoom handling active. It skips
-dialogue and player simulation. G01 permits read-only inventory navigation,
-with item-use, drop and equipment actions blocked. Explicit nonlocal
+dialogue and player simulation. G01 added inventory navigation,
+with consumable-use and drop actions blocked. G03 routes melee/ranged weapon
+equip/unequip requests to the host. Explicit nonlocal
 controllers, Marvin commands and mutating UI shortcuts are blocked. N09 routes
 normal movement/turning keys and mouse intent to the assigned host controller
 after snapshot readiness; guest input never drives local gameplay. N10 receives
 both players' typed poses and animation layers, validates them together, and
 interpolates displayed transforms over 100 ms without predicting movement.
-The pose importer changes position/orientation and animation descriptors only.
+The pose importer changes position/orientation and animation descriptors. The
+separate G03 inventory importer updates validated weapon slots/flags and meshes.
 It does not call normal animation-start functions, gameplay tags, root-motion
 integration or the VM. The presentation clock follows received host ticks;
 the campaign clock stays at the snapshot tick. The guest acknowledges a pose
@@ -136,5 +138,18 @@ validates the whole frame and all transfer preconditions before moving the
 existing snapshot item into the specified inventory and tombstoning its world
 identity. This explicit replica path calls no campaign scripts or pickup effects.
 The normal mutating guest APIs remain blocked. Tab shows companion inventory;
-use/equip/drop is unavailable. Save/restart/rejoin gets the result from the host's
+G03 permits weapon equipment through host requests, while consumable use/drop
+and other equipment remain unavailable. Save/restart/rejoin gets the result from the host's
 checkpoint. See [wire format and validation](coop-protocol.md#pickup-transfers-g01).
+
+## Weapon equipment (G03)
+
+Inventory actions send a desired state for an owned melee/ranged weapon through
+the existing ordered input stream. The host applies normal equipment checks and
+script effects. The guest validates both players' complete weapon-slot state
+together with any pickups, then updates inventory flags and visual attachments
+without running equipment scripts or stat effects. Repeated state is inert;
+invalid ownership/type references reject the whole frame. Normal guest unequip
+calls remain authority-guarded, like item use. Host saves and fresh snapshots
+restore slot pointers, flags, meshes and host-owned effects. See
+[weapon equipment protocol](coop-protocol.md#weapon-equipment-g03).

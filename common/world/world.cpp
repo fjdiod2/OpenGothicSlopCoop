@@ -774,7 +774,8 @@ std::vector<Coop::Pickup> World::takeNetworkPickups() {
   return result;
   }
 
-bool World::applyNetworkPickups(const std::vector<Coop::Pickup>& pickups) {
+bool World::applyNetworkInventory(const std::vector<Coop::Pickup>& pickups,
+                                  const std::array<Coop::WeaponEquipment,2>& equipment) {
   if(isAuthoritative() || pickups.size()>Coop::MaxPickups) return false;
   // Validate the complete batch against the pre-state before removing anything.
   // Use the snapshot's existing item instance: no item constructor, script,
@@ -794,10 +795,28 @@ bool World::applyNetworkPickups(const std::vector<Coop::Pickup>& pickups) {
     if(it->second!=p.before) return false;
     it->second = p.after;
     }
+  // Equipment may refer to an item picked up in this very frame. Validate the
+  // projected inventory, including both players, before applying any transfer.
+  for(size_t i=0; i<equipment.size(); ++i) {
+    auto npc = playerById(i+1);
+    if(!npc) return false;
+    const auto valid = [&](uint64_t encoded, ItmFlags type) {
+      if(encoded==0) return true;
+      if(encoded>uint64_t(UINT32_MAX)+1) return false;
+      auto item = npc->getItem(size_t(encoded-1));
+      if(!item)
+        for(const auto& p:pickups)
+          if(p.player==i+1 && p.instance==encoded-1) { item=itemByObjectId(objectRegistry().worldNamespace(),p.item); break; }
+      return item && item->count()>0 && item->isEquipmentWeapon() && (item->mainFlag() & type)!=0;
+      };
+    if(!valid(equipment[i].melee,ITM_CAT_NF) || !valid(equipment[i].ranged,ITM_CAT_FF) ||
+       (equipment[i].melee!=0 && equipment[i].melee==equipment[i].ranged)) return false;
+    }
   for(const auto& p:pickups) {
     auto item = itemByObjectId(objectRegistry().worldNamespace(),p.item);
     playerById(p.player)->addItem(wobj.takeItem(*item));
     }
+  for(size_t i=0; i<equipment.size(); ++i) playerById(i+1)->applyNetworkEquipment(equipment[i]);
   return true;
   }
 

@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 5 (G01)
+# Co-op wire protocol, version 6 (G03)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -15,7 +15,9 @@ N07 makes the guest a presentation-only process; N08 transfers a host checkpoint
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
 
-Version 5 adds explicit pickup targets to `Input` and ordered pickup transfers
+Version 6 adds desired weapon equipment to `Input` and both actors’ weapon slots
+to `Poses`. Version-5 peers are rejected; checkpoint version remains 56.
+Version 5 added explicit pickup targets to `Input` and ordered pickup transfers
 at the end of `Poses`. Both layouts change; version-4 peers are rejected.
 Version 4 added character poses/animation layers and pose acknowledgements.
 Version 3 added snapshot begin/chunk/end/readiness messages. Older versions are
@@ -50,7 +52,7 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `4` |
+| 8 | 2 | Version | Exactly `6` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
@@ -70,7 +72,7 @@ animation-name/unused slots specified below.
 | --- | --- | --- | --- | --- |
 | 1 | `Hello` | Guest → host | 108 | `0 / 0 / 0 / 0` |
 | 2 | `Welcome` | Host → guest | 44 | `nonzero / nonzero / 0 / nonzero` |
-| 3 | `Input` | Guest → host | 68 | `nonzero / nonzero / nonzero / 0` |
+| 3 | `Input` | Guest → host | 77 | `nonzero / nonzero / nonzero / 0` |
 | 4 | `StateAck` | Host → guest | 52 | `nonzero / nonzero / 0 / nonzero` |
 | 5 | `Reject` | Host → guest | 46 | `0 / 0 / 0 / 0` |
 | 6 | `Accepted` | Host → guest | 108 | `nonzero / 0 / 0 / 0` |
@@ -78,7 +80,7 @@ animation-name/unused slots specified below.
 | 8 | `SnapshotChunk` | Host → guest | 53–32,820 | `nonzero / 2 / 0 / nonzero` |
 | 9 | `SnapshotEnd` | Host → guest | 44 | `nonzero / 2 / 0 / nonzero` |
 | 10 | `SnapshotReady` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
-| 11 | `Poses` | Host → guest | 1,528–2,424 | `nonzero / 2 / 0 / nonzero` |
+| 11 | `Poses` | Host → guest | 1,560–2,456 | `nonzero / 2 / 0 / nonzero` |
 | 12 | `PoseAck` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
 
 ### Hello
@@ -196,6 +198,8 @@ EOF and cancellation while the application owns a completed snapshot.
 | 50 | 2 | Signed relative look Y, in input pixels |
 | 52 | 8 | Pickup target world namespace, or zero |
 | 60 | 8 | Pickup target typed item ID, or zero |
+| 68 | 8 | Equipment inventory instance + 1, or zero |
+| 76 | 1 | Equipment desired state: 0 none, 1 equipped, 2 unequipped |
 
 | Bit | Mask | Action |
 | --- | --- | --- |
@@ -215,7 +219,7 @@ position, elapsed simulation time, damage or a script command. The host determin
 simulation timing and gameplay effects. N09 enables bits 0–5 through the guest's
 normal key mappings (including alternate keys). Jump/Walk remain reserved and
 are rejected by the session as `unsupported_input`. G01 permits item pickup;
-equipment, other interactions and combat need later tasks. Walk is a toggle in the original controller,
+G03 permits melee/ranged weapon equipment. Other interactions and combat need later tasks. Walk is a toggle in the original controller,
 so it must not be incorrectly interpreted as a held modifier.
 
 Each changed held mask sends one sequence; relative mouse packets preserve the
@@ -269,7 +273,8 @@ that guest presentation reached a particular pose endpoint.
 
 All floats are finite IEEE-754 binary32, transmitted as big-endian bit patterns.
 This frame contains a 24-byte prefix, two 729-byte actor records in player order
-1, 2, a u16 pickup count and zero to sixteen 56-byte pickup records. No native structs, pointers or array indexes cross
+1, 2, two 16-byte weapon-equipment records, a u16 pickup count and zero to
+sixteen 56-byte pickup records. No native structs, pointers or array indexes cross
 the wire. The header's player 2 identifies the recipient binding, not an actor
 index within the payload.
 
@@ -280,8 +285,10 @@ index within the payload.
 | 16 | 8 | Highest applied guest input sequence |
 | 24 | 729 | Host actor record |
 | 753 | 729 | Companion actor record |
-| 1482 | 2 | Pickup transfer count, 0–16 |
-| 1484 | count × 56 | Ordered pickup transfers |
+| 1482 | 16 | Host weapon equipment: u64 melee, u64 ranged |
+| 1498 | 16 | Companion weapon equipment: u64 melee, u64 ranged |
+| 1514 | 2 | Pickup transfer count, 0–16 |
+| 1516 | count × 56 | Ordered pickup transfers |
 
 Each actor record is:
 
@@ -308,12 +315,13 @@ NaN, infinity, invalid counts, padding or identities are rejected by the codec.
 After readiness, pose revisions start at 2 and increase by exactly one. Host
 capture occurs after its simulation and controller step, at most once per render
 frame, and is skipped when the tick and applied-input boundary are unchanged
-and no pickup transfers are pending.
+and no pickup transfers or weapon-equipment changes are pending.
 Guest frames must match generation/binding, arrive in revision order, carry
 nondecreasing host ticks/applied-input sequences and never refer to unsent input.
 There is a separate 64-frame application queue; overflow closes the connection.
 The guest resolves both typed NPC IDs in the received world namespace and validates
-both animations and the complete pickup batch before applying anything. Invalid
+both animations, the complete pickup batch and both weapon-equipment records
+before applying anything. Invalid
 world/object/animation/transfer state closes the connection without partially
 applying the frame.
 
@@ -351,9 +359,9 @@ connection; a fresh snapshot is the recovery path. Pending transfers are transie
 and are not saved or replayed into a new generation. Saves contain the resulting
 inventories and tombstones, using the existing checkpoint barrier. Checkpoint
 version remains 56. This task supports picking up existing snapshot items;
-item spawning/dropping, use/equip, NPC inventory changes and other campaign
-outcomes require their own replication. Guest Tab opens its own read-only
-inventory for inspection.
+item spawning/dropping, consumable use, other equipment, NPC inventory changes
+and other campaign outcomes require their own replication. Guest Tab opens its
+own inventory; G03 adds weapon equip/unequip requests.
 
 Snapshots and new saves include optional `coop/focus` schema 1: a little-endian
 u32 version followed by Normal, Melee, Ranged and Magic targeting definitions.
@@ -401,6 +409,65 @@ explicit pickup proves the remaining item still works, including a 1→2 stack
 merge. `fixture_shared_plants` only creates world items; `step_simulation` only
 advances the ordinary controller/simulation path from a held test runtime.
 
+### Weapon equipment (G03)
+
+Inventory Enter/generic action or a normal inventory click selects an owned
+weapon instance and sends its desired equipped state. Equipment and pickup
+intents are mutually exclusive within an `Input`; movement fields retain their
+usual meaning. The equipment item/action fields are both zero for no intent.
+Otherwise action is 1 or 2 and the item field is the u32 script instance index
+plus one, in 1–4,294,967,296. An inventory instance belongs to the bound companion's
+inventory in the current snapshot generation; it is not a world-item object ID.
+There is no guest-supplied owner, slot, reward, forced-equip flag or stat value.
+For stacked identical weapons, the selected inventory row determines the intent:
+the equipped row requests unequip; the spare row requests equip and therefore
+keeps the already equipped copy in place without reapplying its effects.
+
+The host resolves the item in that inventory, requires an ordinary melee/ranged
+weapon (excluding shields), checks the actor's body/interaction/cutscene state
+and requires a sheathed weapon. It applies normal `Npc::useItem`/`unequipItem`
+with forced equip disabled; original attribute/rune checks and equipment script
+effects run only there. Already having the requested state is an idempotent
+success. Missing inventory items, non-weapons and unmet conditions leave the
+slots unchanged. Input ordering, generation/duplicate checks and the save barrier
+are the same as movement and pickups. An input acknowledgement reports processing;
+the authoritative slot state reports the result.
+
+Each pose frame carries complete melee/ranged slots for both actors in role order.
+Each slot is instance + 1, or zero for empty; a nonzero instance cannot occupy both
+slots. These are discrete state fields and are not interpolated. The host also
+emits an update if equipment changes while the simulation tick is held, as when
+inventory actions occur between simulation steps. Repeated unchanged state does
+not rebuild meshes or reapply effects.
+
+Before applying any pickup or equipment change, the guest validates both actors'
+projected inventories, including items transferred by pickups in this same frame.
+All nonempty slots must refer to owned positive-count items of the correct weapon
+category. It then applies pickups, updates the weapon-slot pointers/equipped flags
+and numeric slots (1 melee, 2 ranged), and rebuilds the affected weapon meshes and
+bone attachments. No guest item-use/equip scripts, conditions, bonuses, damage or
+stat effects execute. An invalid second actor also prevents the first actor and
+any otherwise valid pickup from changing. Invalid state closes the connection;
+fresh snapshot loading is the recovery path.
+
+G03 covers sheathed melee/ranged equipment, replacement and unequipping, visible
+attachments, inventory flags and persistence. Armor, jewelry, shields, runes,
+consumable use, drawing/holstering controls and arbitrary campaign/script-effect
+replication remain later work. Equipment scripts/stat changes are authoritative
+on the host and are included in its saved/freshly joined snapshot. Existing save
+format 56 already stores inventory slots/flags and restores their visual meshes;
+no new save schema or client checkpoint is introduced.
+
+`weapon-equipment` in the asset-free codec suite checks literal bytes, every
+fragmentation boundary, invalid/mixed intents, duplicate slots and bounds. The
+parent GUI scenario of the same name uses ordinary inventory navigation and
+Enter to equip, replace and unequip both players' melee/ranged weapons, rejects
+unowned/non-weapon/too-demanding items and repeated requests, checks actual mesh
+presence and separate equipped/spare stack rows, and saves/restarts/rejoins both
+equipped and empty-slot checkpoints.
+Fake-host tests combine a valid pickup and valid first actor with invalid second
+actor equipment; no inventory, object, pose or mesh may partially apply.
+
 ### PoseAck and presentation
 
 `PoseAck` has no body. The header identifies the generation, binding and revision
@@ -422,9 +489,10 @@ ticks. Campaign time and all animation gameplay effects stay host-only.
 Each window's existing local camera follows its own actor (host 1, guest 2).
 
 The two characters' movement/animation and their successful world-item pickups
-are replicated. NPC AI, combat, equipment/use, dialogue, quests and other world
-changes still require later gameplay tasks. See [guest authority](coop-guest.md) for the immutable
-campaign boundary. `Poses` does not imply a full-world revision or a disk commit.
+and weapon equipment are replicated. NPC AI, combat, other equipment/use,
+dialogue, quests and other world changes still require later gameplay tasks.
+See [guest authority](coop-guest.md) for the campaign authority boundary.
+`Poses` does not imply a full-world revision or a disk commit.
 
 ### Reject
 
@@ -436,7 +504,7 @@ Reasons: `1` protocol version, `2` engine fingerprint, `3` game-data fingerprint
 `4` host full, `5` invalid session/handshake. Any other value is malformed. No
 arbitrary error string crosses the wire. A reject is a terminal handshake reply,
 followed by closing the connection. On an undecodable/unsupported peer version,
-closing without a reply is also valid; a peer might not understand a version-5
+closing without a reply is also valid; a peer might not understand a version-6
 reject. Runtime connection failure and stale input are handled by the session
 layer, not by sending an unbound reject in the middle of gameplay.
 
@@ -794,15 +862,16 @@ Connections are loopback-only. Internet transport/security is outside N04.
 
 ## Golden example
 
-This 68-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
+This 77-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 00000044 0005 0003
+4f474350 0000004d 0006 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
 0000000000000000 0000000000000000
+0000000000000000 00
 ```
 
 The test suite checks this literal against both encoding and decoding. It also
@@ -859,8 +928,8 @@ reinterpret saved player identity as a connection ID or silently relax limits.
 
 `pickup-transfers` in the asset-free suite covers literal target bytes, every
 fragmentation point, transfer roundtrips, invalid counts, target pairs, actor
-identities, arithmetic overflow and duplicate IDs. The macOS suite now has 38
-cases. Parent runner `guest-pickup` exercises normal keyboard pickup, inventory
+identities, arithmetic overflow and duplicate IDs. G01 added the 38th macOS case;
+G03 adds a 39th for weapon equipment. Parent runner `guest-pickup` exercises normal keyboard pickup, inventory
 inspection, committed save/restart/fresh rejoin and whole-frame rejection of
 wrong-kind items, inconsistent counts and an invalid second transfer after a
 valid first record. `guest-isolation` verifies only the intended pickup inventory,

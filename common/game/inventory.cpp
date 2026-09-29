@@ -491,6 +491,28 @@ void Inventory::updateArmorView(Npc& owner) {
     owner.updateArmor();
   }
 
+Coop::WeaponEquipment Inventory::networkEquipment() const {
+  return {melee ? uint64_t(melee->clsId())+1 : 0, range ? uint64_t(range->clsId())+1 : 0};
+  }
+
+void Inventory::applyNetworkEquipment(const Coop::WeaponEquipment& equipment, Npc& owner) {
+  if(owner.world().isAuthoritative()) throw std::runtime_error("Cannot equip authoritative replica");
+  // The complete world update has already validated ownership and slot types.
+  // Only flags, slot pointers and visuals change here; no stat/script effects.
+  const auto apply = [&](Item*& slot, uint64_t encoded, uint8_t slotId) {
+    auto next = encoded==0 ? nullptr : findByClass(size_t(encoded-1));
+    if(next==slot) return false;
+    if(slot && slot->isEquipped()) slot->setAsEquipped(false);
+    slot = next;
+    if(slot) { slot->setAsEquipped(true); slot->setSlot(slotId); }
+    return true;
+    };
+  const bool changedMelee = apply(melee,equipment.melee,1);
+  const bool changedRange = apply(range,equipment.ranged,2);
+  if(changedMelee) updateSwordView(owner);
+  if(changedRange) updateBowView(owner);
+  }
+
 void Inventory::updateSwordView(Npc &owner) {
   if(melee==nullptr) {
     owner.setSword(MeshObjects::Mesh());

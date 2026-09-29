@@ -3684,7 +3684,18 @@ void Npc::setCurrentItem(size_t item) {
   }
 
 void Npc::unequipItem(size_t item) {
+  if(!owner.isAuthoritative()) return;
   invent.unequip(item,*this);
+  }
+
+bool Npc::requestWeaponEquipment(size_t instance, bool equipped) {
+  if(!owner.isAuthoritative() || owner.isCutsceneLock() || isDown() || isInAir() || isSlide() ||
+     interactive()!=nullptr || weaponState()!=WeaponState::NoWeapon) return false;
+  auto item = getItem(instance);
+  if(!item || !item->isEquipmentWeapon() || item->count()==0) return false;
+  if(item->isEquipped()==equipped) return true; // Desired state makes retries idempotent.
+  if(equipped) useItem(instance,Item::NSLOT,false); else unequipItem(instance);
+  return item->isEquipped()==equipped;
   }
 
 bool Npc::canSwitchWeapon() const {

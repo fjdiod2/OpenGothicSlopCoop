@@ -455,13 +455,18 @@ InventoryMenu::PageLocal &InventoryMenu::activePageSel() {
   }
   
 void InventoryMenu::onItemAction(uint8_t slotHint) {
-  if(Gothic::inst().isGuest()) return; // Inspect replicated inventory; equipment is G03.
   auto& page = activePage();
   auto& sel  = activePageSel();
 
   auto it = page.get(sel.sel);
   if(!it.isValid())
     return;
+
+  if(Gothic::inst().isGuest()) {
+    if(state==State::Equip && slotHint==Item::NSLOT && it->isEquipmentWeapon() && onEquipmentRequest)
+      onEquipmentRequest(it->clsId(),!it.isEquipped());
+    return;
+    }
 
   if(state==State::Equip) {
     const size_t clsId = it->clsId();
@@ -479,6 +484,18 @@ void InventoryMenu::onItemAction(uint8_t slotHint) {
     takeTimer.start(200);
     onTakeStuff();
     }
+  }
+
+uint64_t InventoryMenu::selectedItemInstance() {
+  if(!isActive() || !pagePl) return 0;
+  auto it = activePage().get(activePageSel().sel);
+  return it.isValid() ? uint64_t(it->clsId())+1 : 0;
+  }
+
+bool InventoryMenu::selectedItemEquipped() {
+  if(!isActive() || !pagePl) return false;
+  auto it = activePage().get(activePageSel().sel);
+  return it.isValid() && it.isEquipped();
   }
 
 void InventoryMenu::onTakeStuff() { 

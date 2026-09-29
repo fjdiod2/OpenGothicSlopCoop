@@ -42,7 +42,7 @@ size_t bodySize(MessageType type) {
     case MessageType::Hello:    return 64;
     case MessageType::Accepted: return 64;
     case MessageType::Welcome:  return 0;
-    case MessageType::Input:    return 24;
+    case MessageType::Input:    return 33;
     case MessageType::StateAck: return 8;
     case MessageType::Reject:   return 2;
     case MessageType::SnapshotBegin: return 40;
@@ -50,7 +50,7 @@ size_t bodySize(MessageType type) {
     case MessageType::SnapshotEnd:
     case MessageType::SnapshotReady:
     case MessageType::PoseAck: return 0;
-    case MessageType::Poses: return 26+2*(49+MaxAnimationLayers*(AnimationNameBytes+21));
+    case MessageType::Poses: return 58+2*(49+MaxAnimationLayers*(AnimationNameBytes+21));
     }
   invalid(ProtocolErrorCode::Type,"Unknown co-op message type");
   }
@@ -85,6 +85,9 @@ void validateHeader(const Message& message, MessageType type) {
 
 void validatePayload(const Message& message) {
   if(auto poses = std::get_if<Poses>(&message.payload)) {
+    for(const auto& e:poses->equipment)
+      if(e.melee>uint64_t(UINT32_MAX)+1 || e.ranged>uint64_t(UINT32_MAX)+1 || (e.melee!=0 && e.melee==e.ranged))
+        invalid(ProtocolErrorCode::Fields,"Invalid weapon equipment");
     if(poses->pickups.size()>MaxPickups)
       invalid(ProtocolErrorCode::Fields,"Too many pickup transfers");
     for(size_t i=0; i<poses->pickups.size(); ++i) {
@@ -126,6 +129,9 @@ void validatePayload(const Message& message) {
       invalid(ProtocolErrorCode::Size,"Invalid snapshot chunk");
     }
   if(auto input = std::get_if<Input>(&message.payload)) {
+    if(input->equipmentAction>2 || (input->equipmentItem==0)!=(input->equipmentAction==0) ||
+       input->equipmentItem>uint64_t(UINT32_MAX)+1 || (input->equipmentItem!=0 && input->pickupItem!=0))
+      invalid(ProtocolErrorCode::Fields,"Invalid equipment intent");
     if((input->pickupWorld==0)!=(input->pickupItem==0) || (input->buttons & ~KnownButtons)!=0 ||
        input->lookX < -MaxLookDelta || input->lookX > MaxLookDelta ||
        input->lookY < -MaxLookDelta || input->lookY > MaxLookDelta)
@@ -231,6 +237,7 @@ Message decode(std::span<const uint8_t> bytes) {
           else if(layer!=AnimationLayer{}) invalid(ProtocolErrorCode::Fields,"Nonzero unused pose layer");
           }
         }
+      for(auto& e:poses.equipment) { e.melee=integer(8); e.ranged=integer(8); }
       const auto count = integer(2);
       if(count>MaxPickups || offset+count*PickupBytes!=bytes.size())
         invalid(ProtocolErrorCode::Size,"Invalid pickup transfer count");
@@ -254,7 +261,7 @@ Message decode(std::span<const uint8_t> bytes) {
       message.payload = SnapshotChunk{get(bytes,44,8),Bytes(bytes.begin()+52,bytes.end())};
       break;
     case MessageType::Input:
-      message.payload = Input{uint32_t(get(bytes,44,4)),getSigned(bytes,48),getSigned(bytes,50),get(bytes,52,8),get(bytes,60,8)};
+      message.payload = Input{uint32_t(get(bytes,44,4)),getSigned(bytes,48),getSigned(bytes,50),get(bytes,52,8),get(bytes,60,8),get(bytes,68,8),uint8_t(get(bytes,76,1))};
       break;
     case MessageType::StateAck:
       message.payload = StateAck{get(bytes,44,8)};
@@ -338,6 +345,7 @@ Bytes encode(const Message& message) {
           put(bytes,layer.started,8); put(bytes,layer.blend,8); put(bytes,layer.body,4); put(bytes,layer.combination,1);
           }
         }
+      for(const auto& e:poses.equipment) { put(bytes,e.melee,8); put(bytes,e.ranged,8); }
       put(bytes,poses.pickups.size(),2);
       for(const auto& p:poses.pickups) {
         put(bytes,p.player,8); put(bytes,p.actor,8); put(bytes,p.item,8); put(bytes,p.instance,8);
@@ -362,6 +370,8 @@ Bytes encode(const Message& message) {
       put(bytes,uint16_t(input.lookY),2);
       put(bytes,input.pickupWorld,8);
       put(bytes,input.pickupItem,8);
+      put(bytes,input.equipmentItem,8);
+      put(bytes,input.equipmentAction,1);
       break;
       }
     case MessageType::StateAck:

@@ -117,6 +117,8 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("input_stale"); out.Uint64(net.inputStale);
   out.Key("pickup_requests"); out.Uint64(networkPickupRequests);
   out.Key("pickup_accepted"); out.Uint64(networkPickupAccepted);
+  out.Key("equipment_requests"); out.Uint64(networkEquipmentRequests);
+  out.Key("equipment_accepted"); out.Uint64(networkEquipmentAccepted);
   out.Key("acknowledged_revision"); out.Uint64(net.acknowledgedRevision);
   out.Key("held_buttons"); out.Uint(networkButtons);
   out.Key("remote_buttons"); out.Uint(remoteButtons);
@@ -184,7 +186,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
     out.Key("rotation"); out.Double(npc->rotation());
     out.Key("hp"); out.Int(npc->attribute(ATR_HITPOINTS));
     out.Key("hp_max"); out.Int(npc->attribute(ATR_HITPOINTSMAX));
-    auto itemInfo = [&](const Item& item, size_t count) {
+    auto itemInfo = [&](const Item& item, size_t count, bool equipped=false, uint8_t slot=Item::NSLOT) {
       out.StartObject();
       out.Key("object_id"); out.Uint64(world->objectId(&item));
       out.Key("instance"); out.Uint64(item.clsId());
@@ -195,18 +197,23 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       str(sym ? sym->name() : "");
       out.Key("name"); str(item.displayName());
       out.Key("count"); out.Uint64(count);
-      out.Key("equipped"); out.Bool(item.isEquipped());
+      out.Key("equipped"); out.Bool(equipped);
+      out.Key("slot"); out.Uint(slot);
+      out.Key("weapon"); out.Bool(item.isEquipmentWeapon());
+      out.Key("usable_by_local_player"); int32_t attribute=0,value=0; out.Bool(item.checkCondUse(*game.localPlayer(),attribute,value));
       out.EndObject();
       };
     out.Key("items"); out.StartArray();
     for(auto it = npc->inventory().iterator(Inventory::T_Inventory); it.isValid(); ++it)
-      itemInfo(*it, it.count());
+      itemInfo(*it, it.count(),it.isEquipped(),it.slot());
     out.EndArray();
     out.Key("inventory_player_id"); out.Uint64(world->playerId(inventory.activePlayer()));
+    out.Key("inventory_selected"); out.Uint64(inventory.selectedItemInstance());
+    out.Key("inventory_selected_equipped"); out.Bool(inventory.selectedItemEquipped());
     out.Key("inventory_items"); out.StartArray();
     if(auto owner = inventory.activePlayer())
       for(auto it=owner->inventory().iterator(Inventory::T_Inventory); it.isValid(); ++it)
-        itemInfo(*it,it.count());
+        itemInfo(*it,it.count(),it.isEquipped(),it.slot());
     out.EndArray();
     out.Key("players"); out.StartArray();
     for(auto& entry:world->players()) {
@@ -242,9 +249,17 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       auto focusedItem = actorFocus.item ? world->script().findSymbol(actorFocus.item->clsId()) : nullptr;
       str(focusedItem ? focusedItem->name() : "");
       out.Key("focus_item_id"); out.Uint64(actorFocus.item ? world->objectId(actorFocus.item) : 0);
+      const auto equipment = actor->networkEquipment();
+      const auto views = actor->networkWeaponViews();
+      out.Key("equipment"); out.StartObject();
+      out.Key("melee"); out.Uint64(equipment.melee);
+      out.Key("ranged"); out.Uint64(equipment.ranged);
+      out.Key("melee_view"); out.Bool(views[0]);
+      out.Key("ranged_view"); out.Bool(views[1]);
+      out.EndObject();
       out.Key("items"); out.StartArray();
       for(auto it=actor->inventory().iterator(Inventory::T_Inventory); it.isValid(); ++it)
-        itemInfo(*it,it.count());
+        itemInfo(*it,it.count(),it.isEquipped(),it.slot());
       out.EndArray();
       out.EndObject();
       }
@@ -525,6 +540,15 @@ void MainWindow::pollTestControl() {
         pos.y = ground.v.y+5.f;
         if(cls==size_t(-1) || !game.world()->addItem(cls,pos))
           throw std::runtime_error("Cannot create shared plant fixture");
+        }
+      }
+    else if(action=="fixture_weapons") {
+      if(!game.world()->isAuthoritative()) throw std::runtime_error("Guest cannot create weapon fixture");
+      auto npc = game.world()->playerById(testInputPlayer);
+      for(const auto symbol : {"ITMW_1H_VLK_DAGGER","ITMW_1H_BAU_MACE","ITRW_BOW_L_01","ITMW_1H_VLK_SWORD"}) {
+        auto cls = game.world()->script().findSymbolIndex(symbol);
+        if(cls==size_t(-1)) throw std::runtime_error("Missing weapon fixture instance");
+        npc->addItem(cls,std::string_view(symbol)=="ITMW_1H_VLK_DAGGER" ? 2 : 1);
         }
       }
     else if(action=="remove_world_item") {

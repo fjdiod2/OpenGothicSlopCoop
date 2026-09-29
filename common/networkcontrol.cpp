@@ -239,6 +239,15 @@ void MainWindow::sendNetworkInput(int x, int y, uint64_t pickupWorld, uint64_t p
     network.invalidate("input_queue_full");
   }
 
+void MainWindow::sendNetworkEquipment(size_t instance, bool equipped) {
+  auto& game = Gothic::inst();
+  if(network.status().role!=Coop::Role::Guest || network.status().snapshotState!="ready" ||
+     game.checkLoading()!=Gothic::LoadState::Idle || instance>UINT32_MAX ||
+     !game.localPlayer() || inventory.activePlayer()!=game.localPlayer()) return;
+  if(!network.sendInput({networkButtons,0,0,0,0,uint64_t(instance)+1,uint8_t(equipped ? 1 : 2)}))
+    network.invalidate("input_queue_full");
+  }
+
 void MainWindow::tickNetworkInput(bool apply) {
   auto& game = Gothic::inst();
   const auto& status = network.status();
@@ -254,6 +263,8 @@ void MainWindow::tickNetworkInput(bool apply) {
     networkButtons = remoteButtons = 0;
     networkInstalledInput = 0;
     networkPickupRequests = networkPickupAccepted = 0;
+    networkEquipmentRequests = networkEquipmentAccepted = 0;
+    networkEquipmentSent = {};
     networkInterpolation.reset();
     if(status.role==Coop::Role::Host && game.world() && game.world()->playerById(PlayerIdentity::Companion))
       controlForPlayer(PlayerIdentity::Companion).clearInput();
@@ -284,6 +295,12 @@ void MainWindow::tickNetworkInput(bool apply) {
       ++networkPickupRequests;
       if(control.pickupObject(input.pickupWorld,input.pickupItem)) ++networkPickupAccepted;
       }
+    if(input.equipmentItem!=0) {
+      ++networkEquipmentRequests;
+      if(!dialogs.isActive() && !video.isActive() && game.world()->currentCs()==nullptr &&
+         game.world()->playerById(PlayerIdentity::Companion)->requestWeaponEquipment(size_t(input.equipmentItem-1),input.equipmentAction==1))
+        ++networkEquipmentAccepted;
+      }
     }
   // Bound the accumulated impulse per frame, including a burst of packets.
   // The sender never supplies elapsed simulation time.
@@ -297,8 +314,9 @@ void MainWindow::updateNetworkPoses() {
   if(game.checkLoading()!=Gothic::LoadState::Idle || !world || status.snapshotState!="ready") return;
   try {
     if(status.role==Coop::Role::Host) {
+      const std::array<Coop::WeaponEquipment,2> equipment = {world->playerById(1)->networkEquipment(),world->playerById(2)->networkEquipment()};
       if(status.posesSent!=0 && status.poseTick==world->tickCount() && status.inputApplied==networkInstalledInput &&
-         !world->hasNetworkPickups()) return;
+         !world->hasNetworkPickups() && equipment==networkEquipmentSent) return;
       const auto revision = std::max(status.snapshotRevision,status.posesSent)+1;
       if(revision==0) throw std::runtime_error("Pose revision exhausted");
       while(status.inputApplied<networkInstalledInput)
@@ -311,8 +329,10 @@ void MainWindow::updateNetworkPoses() {
       for(size_t i=0; i<poses.actors.size(); ++i)
         poses.actors[i] = world->playerById(i+1)->networkPose();
       poses.pickups = world->takeNetworkPickups();
+      poses.equipment = equipment;
       if(!network.sendPoses(status.generation,revision,poses))
         throw std::runtime_error("Cannot queue authoritative poses");
+      networkEquipmentSent = equipment;
       return;
       }
     // Advance the existing blend before retargeting it. Otherwise a steady
@@ -337,8 +357,8 @@ void MainWindow::updateNetworkPoses() {
         if(!actors[i] || !actors[i]->validateNetworkPose(poses.actors[i]))
           throw std::runtime_error("Unknown pose identity or animation");
         }
-      if(!world->applyNetworkPickups(poses.pickups))
-        throw std::runtime_error("Pickup transfer does not match the snapshot state");
+      if(!world->applyNetworkInventory(poses.pickups,poses.equipment))
+        throw std::runtime_error("Inventory update does not match the snapshot state");
       if(!poses.pickups.empty()) {
         player.clearFocus();
         for(auto& entry:otherPlayers) entry.second->clearFocus();

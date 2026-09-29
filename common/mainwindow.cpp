@@ -155,6 +155,7 @@ float MainWindow::uiScale() const {
   }
 
 void MainWindow::setupUi() {
+  inventory.onEquipmentRequest = [this](size_t instance, bool equipped) { sendNetworkEquipment(instance,equipped); };
   setLayout(new StackLayout());
   addWidget(&document);
   addWidget(&dialogs);

@@ -49,6 +49,7 @@ class MdlVisual final {
     void                           setBody       (Npc& npc, MeshObjects::Mesh&& body, const int32_t version);
     void                           setSword      (MeshObjects::Mesh&& sword);
     void                           setRangedWeapon(MeshObjects::Mesh&& bow);
+    std::array<bool,2>              weaponViews() const { return {!sword.view.isEmpty(),!bow.view.isEmpty()}; }
     void                           setShield     (MeshObjects::Mesh&& shield);
     void                           setAmmoItem   (MeshObjects::Mesh&& ammo, std::string_view bone);
     void                           setSlotItem   (MeshObjects::Mesh&& itm,  std::string_view bone);

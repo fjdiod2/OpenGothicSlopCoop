@@ -3,6 +3,7 @@
 #include <Tempest/Widget>
 #include <Tempest/Texture2d>
 #include <Tempest/Timer>
+#include <functional>
 
 #include "graphics/inventoryrenderer.h"
 #include "game/inventory.h"
@@ -48,7 +49,10 @@ class InventoryMenu : public Tempest::Widget {
     State isOpen() const;
     bool  isActive() const;
     const Npc* activePlayer() const { return isActive() ? player : nullptr; }
+    uint64_t selectedItemInstance(); // Diagnostic: class + 1, zero if no selection.
+    bool     selectedItemEquipped();
     void  onWorldChanged();
+    std::function<void(size_t,bool)> onEquipmentRequest;
 
     void  tick(uint64_t dt);
     void  draw(Tempest::Encoder<Tempest::CommandBuffer>& cmd);

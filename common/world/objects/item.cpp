@@ -303,6 +303,10 @@ bool Item::isArmor() const {
   return flg & ITM_CAT_ARMOR;
   }
 
+bool Item::isEquipmentWeapon() const {
+  return (mainFlag() & (ITM_CAT_NF | ITM_CAT_FF))!=0 && (ItmFlags(itemFlag()) & ITM_SHIELD)==0;
+  }
+
 int32_t Item::spellId() const {
   return hitem->spell;
   }

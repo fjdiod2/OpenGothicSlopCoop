@@ -94,6 +94,10 @@ class Npc final {
     Coop::ActorPose networkPose() const;
     bool       validateNetworkPose(const Coop::ActorPose& pose) const;
     void       applyNetworkPose(const Coop::ActorPose& pose);
+    Coop::WeaponEquipment networkEquipment() const { return invent.networkEquipment(); }
+    void       applyNetworkEquipment(const Coop::WeaponEquipment& equipment) { invent.applyNetworkEquipment(equipment,*this); }
+    std::array<bool,2> networkWeaponViews() const { return visual.weaponViews(); }
+    bool       requestWeaponEquipment(size_t instance, bool equipped);
 
     auto       transform()  const -> Tempest::Matrix4x4;
     auto       position()   const -> Tempest::Vec3;

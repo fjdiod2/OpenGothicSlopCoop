@@ -58,7 +58,8 @@ class World final {
     void                 recordNetworkPickup(const Coop::Pickup& pickup);
     bool                 hasNetworkPickups() const { return pickupOverflow || !pendingPickups.empty(); }
     std::vector<Coop::Pickup> takeNetworkPickups();
-    bool                 applyNetworkPickups(const std::vector<Coop::Pickup>& pickups);
+    bool                 applyNetworkInventory(const std::vector<Coop::Pickup>& pickups,
+                                                const std::array<Coop::WeaponEquipment,2>& equipment);
     void                 postInit();
     std::string_view     name() const { return wname; }
 

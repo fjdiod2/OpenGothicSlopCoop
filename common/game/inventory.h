@@ -6,6 +6,7 @@
 #include <string>
 
 #include "game/constants.h"
+#include "network/protocol.h"
 
 class Item;
 class World;
@@ -95,6 +96,8 @@ class Inventory final {
     void   updateShieldView(Npc& owner);
     void   updateRuneView  (Npc& owner);
     void   updateView      (Npc& owner);
+    Coop::WeaponEquipment networkEquipment() const;
+    void   applyNetworkEquipment(const Coop::WeaponEquipment& equipment, Npc& owner);
 
     const Item*  activeWeapon() const;
     Item*  activeWeapon();
