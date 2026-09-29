@@ -49,9 +49,12 @@ MainWindow::MainWindow(Device& device)
   Gothic::inst().onSettingsChanged.bind(this,&MainWindow::onSettings);
   onSettings();
 
-  if(Gothic::inst().version().game==2)
-    setWindowTitle("Gothic II"); else
-    setWindowTitle("Gothic");
+  std::string title = Gothic::inst().version().game==2 ? "Gothic II" : "Gothic";
+  if(CommandLine::inst().coopEndpoint().role==Coop::Role::Host)
+    title += " - Host";
+  else if(CommandLine::inst().coopEndpoint().role==Coop::Role::Guest)
+    title += " - Guest";
+  setWindowTitle(title.c_str());
 
   if(!CommandLine::inst().isWindowMode()) {
     setFullscreen(true);
