@@ -88,6 +88,29 @@ void MainWindow::invalidateNetworkWorld() {
   worldReplacementPrepared = true;
   }
 
+bool MainWindow::handleCoopFailure() {
+  auto& game=Gothic::inst();
+  if(game.checkLoading()!=Gothic::LoadState::Idle || !game.gameSession() ||
+     !game.gameSession()->observeCoopFailure()) return false;
+  if(!handledCoopFailure) {
+    handledCoopFailure=true;
+    clearInput();
+    testHeldKeys.clear();
+    testReleaseAt=0;
+    dMouse=Tempest::Point();
+    inventory.onWorldChanged();
+    dialogs.onWorldChanged();
+    uiKeyUp=nullptr;
+    if(queuedSave) {
+      queuedSave.reset();
+      saveStatus="denied_failure";
+      testSaveDelayMs=0;
+      }
+    update();
+    }
+  return true;
+  }
+
 void MainWindow::tickNetwork() {
   if(fingerprintJob.valid() && fingerprintJob.wait_for(std::chrono::seconds(0))==std::future_status::ready) {
     try {
@@ -208,7 +231,7 @@ constexpr std::pair<KeyCodec::Action,uint32_t> networkActions[] = {
 
 void MainWindow::networkKey(Tempest::KeyEvent& event, bool down) {
   auto& game = Gothic::inst();
-  if(network.status().snapshotState!="ready" || game.checkLoading()!=Gothic::LoadState::Idle ||
+  if(game.isCoopFailed() || network.status().snapshotState!="ready" || game.checkLoading()!=Gothic::LoadState::Idle ||
      game.localPlayerId()!=PlayerIdentity::Companion) return;
   const auto mapped = [&](const Tempest::KeyEvent& e) { auto a=keycodec.tr(e); return a==KeyCodec::Weapon ? KeyCodec::WeaponMele : a; };
   const auto action = mapped(event);
@@ -241,7 +264,7 @@ void MainWindow::networkKey(Tempest::KeyEvent& event, bool down) {
   }
 
 void MainWindow::sendNetworkInput(int x, int y, uint64_t pickupWorld, uint64_t pickupItem) {
-  if(network.status().role!=Coop::Role::Guest || network.status().snapshotState!="ready") return;
+  if(Gothic::inst().isCoopFailed() || network.status().role!=Coop::Role::Guest || network.status().snapshotState!="ready") return;
   const auto clamp = [](int value) { return int16_t(std::clamp(value,-int(Coop::MaxLookDelta),int(Coop::MaxLookDelta))); };
   if(!network.sendInput({networkButtons,clamp(x),clamp(y),pickupWorld,pickupItem}))
     network.invalidate("input_queue_full");
@@ -249,7 +272,7 @@ void MainWindow::sendNetworkInput(int x, int y, uint64_t pickupWorld, uint64_t p
 
 void MainWindow::sendNetworkEquipment(size_t instance, bool equipped) {
   auto& game = Gothic::inst();
-  if(network.status().role!=Coop::Role::Guest || network.status().snapshotState!="ready" ||
+  if(game.isCoopFailed() || network.status().role!=Coop::Role::Guest || network.status().snapshotState!="ready" ||
      game.checkLoading()!=Gothic::LoadState::Idle || instance>UINT32_MAX ||
      !game.localPlayer() || inventory.activePlayer()!=game.localPlayer()) return;
   if(!network.sendInput({networkButtons,0,0,0,0,uint64_t(instance)+1,uint8_t(equipped ? 1 : 2)}))
@@ -258,7 +281,7 @@ void MainWindow::sendNetworkEquipment(size_t instance, bool equipped) {
 
 void MainWindow::sendNetworkConsumable(size_t instance) {
   auto& game=Gothic::inst();
-  if(network.status().role!=Coop::Role::Guest || network.status().snapshotState!="ready" ||
+  if(game.isCoopFailed() || network.status().role!=Coop::Role::Guest || network.status().snapshotState!="ready" ||
      game.checkLoading()!=Gothic::LoadState::Idle || instance>UINT32_MAX ||
      !game.localPlayer() || inventory.activePlayer()!=game.localPlayer()) return;
   if(!network.sendInput({networkButtons,0,0,0,0,uint64_t(instance)+1,3}))
@@ -296,6 +319,12 @@ void MainWindow::tickNetworkInput(bool apply) {
     if(status.role==Coop::Role::Host && game.world() && game.world()->playerById(PlayerIdentity::Companion))
       controlForPlayer(PlayerIdentity::Companion).clearInput();
     networkControlGeneration = controlGeneration;
+    }
+  if(game.isCoopFailed()) {
+    // Discard late commands without applying or acknowledging them. A later
+    // load fences this connection and its sequence space with a new generation.
+    while(network.takeInput()) ++discardedFailureInputs;
+    return;
     }
   if(!apply || status.role!=Coop::Role::Host || status.snapshotState!="ready" || !game.world()) return;
   auto& control = controlForPlayer(PlayerIdentity::Companion);

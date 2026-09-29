@@ -285,6 +285,12 @@ void MainWindow::paintEvent(PaintEvent& event) {
     fnt.drawText(p,20,h()-80,canRejoinNetwork() ? "Connection lost. Press R to rejoin" :
                                                "Waiting for the host world");
     }
+  if(Gothic::inst().isCoopFailed() && st==Gothic::LoadState::Idle) {
+    auto& fnt = Resources::font(scale);
+    fnt.drawText(p,20,h()-130,"Co-op session ended: a player died.");
+    fnt.drawText(p,20,h()-105,Gothic::inst().isGuest() ? "Waiting for the host to load a save." :
+                                                       "Press Escape to load a save or start a new game.");
+    }
   if(Gothic::inst().doFrate() && !Gothic::inst().isDesktop()) {
     char fpsT[64]={};
     std::snprintf(fpsT,sizeof(fpsT),"fps = %.2f",fps.get());
@@ -334,6 +340,7 @@ void MainWindow::resizeEvent(SizeEvent&) {
   }
 
 void MainWindow::mouseDownEvent(MouseEvent &event) {
+  if(Gothic::inst().isCoopFailed()) return;
   if(event.button<sizeof(mouseP))
     mouseP[event.button]=true;
   auto act     = keycodec.tr(event);
@@ -342,6 +349,7 @@ void MainWindow::mouseDownEvent(MouseEvent &event) {
   }
 
 void MainWindow::mouseUpEvent(MouseEvent &event) {
+  if(Gothic::inst().isCoopFailed()) return;
   auto act     = keycodec.tr(event);
   auto mapping = keycodec.mapping(event);
   player.onKeyReleased(act,mapping);
@@ -436,6 +444,7 @@ void MainWindow::keyDownEvent(KeyEvent &event) {
       rejoinNetwork();
       event.accept();
       }
+    else if(Gothic::inst().isCoopFailed()) return;
     else if(inventory.isActive()) inventory.keyDownEvent(event);
     else if(keycodec.tr(event)==KeyCodec::Inventory && Gothic::inst().localPlayer() &&
             network.status().snapshotState=="ready") {
@@ -445,7 +454,8 @@ void MainWindow::keyDownEvent(KeyEvent &event) {
     else networkKey(event,true);
     return;
     }
-  if(Gothic::inst().isNetworkPaused()) return;
+  if(Gothic::inst().isCoopFailed() && !rootMenu.isActive()) { event.accept(); return; }
+  if(Gothic::inst().isNetworkPaused() && !Gothic::inst().isCoopFailed()) return;
   if(video.isActive()){
     event.accept();
     video.keyDownEvent(event);
@@ -463,6 +473,8 @@ void MainWindow::keyDownEvent(KeyEvent &event) {
       return;
       }
     }
+
+  if(Gothic::inst().isCoopFailed()) return;
 
   if(chapter.isActive()){
     event.accept();
@@ -514,6 +526,7 @@ void MainWindow::keyDownEvent(KeyEvent &event) {
   }
 
 void MainWindow::keyRepeatEvent(KeyEvent& event) {
+  if(Gothic::inst().isCoopFailed() && uiKeyUp!=&rootMenu) return;
   if(uiKeyUp==&video){
     if(event.isAccepted())
       return;
@@ -544,7 +557,12 @@ void MainWindow::keyRepeatEvent(KeyEvent& event) {
 
 void MainWindow::keyUpEvent(KeyEvent &event) {
   if(Gothic::inst().isGuest()) { networkKey(event,false); return; }
-  if(Gothic::inst().isNetworkPaused()) return;
+  if(Gothic::inst().isCoopFailed() && !rootMenu.isActive()) {
+    if(keycodec.tr(event)==KeyCodec::Escape) rootMenu.setMainMenu();
+    event.accept();
+    return;
+    }
+  if(Gothic::inst().isNetworkPaused() && !Gothic::inst().isCoopFailed()) return;
   if(uiKeyUp==&video){
     video.keyUpEvent(event);
     if(event.isAccepted())
@@ -554,6 +572,7 @@ void MainWindow::keyUpEvent(KeyEvent &event) {
     if(event.isAccepted())
       return;
     }
+  if(Gothic::inst().isCoopFailed()) return;
   if(uiKeyUp==&chapter){
     chapter.keyUpEvent(event);
     if(event.isAccepted())
@@ -840,6 +859,7 @@ void MainWindow::isDialogClosed(bool& ret) {
 
 template<Tempest::KeyEvent::KeyType k>
 void MainWindow::onMarvinKey() {
+  if(Gothic::inst().isCoopFailed() && k!=Event::K_F9 && k!=Event::K_F3) return;
   if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused()) return;
   switch(k) {
     case Event::K_F2:
@@ -960,6 +980,7 @@ uint64_t MainWindow::tick() {
     }
 
   video.tick();
+  if(handleCoopFailure()) { update(); return 0; }
   if(video.isActive())
     return 0;
 
@@ -995,6 +1016,7 @@ uint64_t MainWindow::tick() {
   dialogs.tick(dt);
   inventory.tick(dt);
   Gothic::inst().tick(dt);
+  if(handleCoopFailure()) { update(); return 0; }
   player.tickFocus();
 
   if(dialogs.isActive())
@@ -1113,7 +1135,7 @@ Camera::Mode MainWindow::solveCameraMode() const {
   }
 
 void MainWindow::startGame(std::string_view slot) {
-  if(Gothic::inst().isGuest() || Gothic::inst().isNetworkPaused() || queuedSave ||
+  if(Gothic::inst().isGuest() || (Gothic::inst().isNetworkPaused() && !Gothic::inst().isCoopFailed()) || queuedSave ||
      Gothic::inst().checkLoading()!=Gothic::LoadState::Idle) return;
   // gothic.emitGlobalSound(gothic.loadSoundFx("NEWGAME"));
   loadStatus = "pending";
@@ -1158,6 +1180,7 @@ void MainWindow::loadGame(std::string_view slot) {
 
 void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   if(queuedSave || Gothic::inst().checkLoading()!=Gothic::LoadState::Idle) return;
+  if(handleCoopFailure()) { saveStatus = "denied_failure"; return; }
   if(Gothic::inst().isNetworkPaused()) { saveStatus = "denied_snapshot"; return; }
   if(Gothic::inst().isGuest()) {
     saveStatus = "denied_guest";
@@ -1177,6 +1200,7 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
 
 void MainWindow::beginQueuedSave() try {
   auto& game = Gothic::inst();
+  if(handleCoopFailure()) return;
   if(!queuedSave || game.checkLoading()!=Gothic::LoadState::Idle || game.isNetworkPaused()) return;
   auto request = std::move(*queuedSave);
   queuedSave.reset();
@@ -1309,6 +1333,8 @@ void MainWindow::onWorldLoaded() {
     return; // Saving did not replace camera, world pointers or controller state.
     }
   worldReplacementPrepared = false;
+  handledCoopFailure = false;
+  discardedFailureInputs = 0;
   dMouse = Point();
   rebuildPlayerControls();
 
@@ -1464,6 +1490,7 @@ void MainWindow::dispatchPlayerKey(uint64_t id, KeyEvent& event, bool down) {
       keyUpEvent(event);
     return;
     }
+  if(Gothic::inst().isCoopFailed()) return;
   auto& control = controlForPlayer(id);
   if(down)
     control.onKeyPressed(keycodec.tr(event),event.key,keycodec.mapping(event));
@@ -1478,6 +1505,7 @@ void MainWindow::setFullscreen(bool fs) {
 
 void MainWindow::render(){
   try {
+    handleCoopFailure();
     tickNetwork();
     pollTestControl();
     static uint64_t time=Application::tickCount();
@@ -1503,6 +1531,7 @@ void MainWindow::render(){
       */
     const uint64_t dt = tick();
     updateNetworkPoses();
+    handleCoopFailure();
     beginQueuedSave(); // Capture only after this step's input and pose acknowledgement.
     updateAnimation(dt);
     tickCamera(dt);

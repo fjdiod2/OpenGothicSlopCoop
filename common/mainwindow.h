@@ -126,6 +126,9 @@ class MainWindow : public Tempest::Window {
     void sendNetworkConsumable(size_t instance);
     void tickNetworkInput(bool apply = false);
     void updateNetworkPoses();
+    bool handleCoopFailure();
+    bool handledCoopFailure = false;
+    uint64_t discardedFailureInputs = 0;
     std::set<Tempest::Event::KeyType> networkKeys;
     uint32_t networkButtons = 0, remoteButtons = 0;
     uint64_t networkControlGeneration = 0;

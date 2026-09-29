@@ -408,6 +408,53 @@ concurrent attacks, duplicate/stale input, original level-up, an offline compani
 aggressive AI against either player, disk restarts and atomic malformed-frame
 rejection. Concrete run results are recorded in the parent `TESTING.md`.
 
+### Shared death and checkpoint recovery (D01)
+
+With co-op enabled, `GameSession` latches failure when either roster actor enters
+the original **dead** state. Original unconsciousness is distinct and does not
+end the session. A host completes the current world step, observes both actors
+(to cover simultaneous damage), and freezes before another controller/script
+step or queued world transition. The simulation clock and animation updates stop.
+Both controllers and held input are cleared, active inventory/dialogue UI closes,
+and both windows show the failure message. The host's Escape menu remains available
+to choose a checkpoint or start a new game if no checkpoint exists. A transport
+disconnect alone does not set or clear this failure.
+
+No new RPC or wire field is required. The existing validated `Poses.progression`
+records carry `down = 2` for death and `down = 1` for unconsciousness. The guest
+latches failure only after installing a valid authoritative frame or host
+snapshot, never from local HP arithmetic or a client death claim. A connecting
+or reconnecting guest can receive a frozen failed-world snapshot; that does not
+revive either actor or resume the host. Guest campaign execution remains disabled.
+Protocol/checkpoint versions stay **8/56**, with exact executable compatibility
+still enforced by the handshake.
+
+Late inputs on the failed connection are sequence-validated then discarded before
+controller, pickup, equipment or consumable dispatch. They are not acknowledged
+as applied. The last legitimate pre-failure input boundary remains intact; no
+unbounded deferred gameplay queue survives waiting at the failure screen. Normal
+queue limits still apply to a peer sending an excessive burst. A load destroys
+old transport queues and changes the generation, so delayed pre-death commands
+cannot affect the restored world.
+
+User disk-save requests are refused with `denied_failure`, including a queued
+request that reaches its write boundary after a fatal step. No pending writer is
+started and the last committed checkpoint is preserved. A save already writing
+holds simulation, so death cannot advance concurrently with that save. In-memory
+snapshots remain available to show the failed world to reconnecting peers.
+Failure is a latch on the current session object, not transport state or a new
+checkpoint field. Loading a healthy checkpoint constructs a fresh session and
+restores the original actors, inventories, progression and world; a checkpoint
+containing an already-dead player is detected again. New-game recovery also
+constructs a fresh session. Offline play without a co-op role keeps its original
+behavior. Revive/incapacitation gameplay remains the later D02 task.
+
+The parent `death-reload` scenario uses real monster attacks, ordinary fist
+unconsciousness and simultaneous physics landing damage. Fixtures set initial
+positions/HP only, never expected death/failure outcomes. It also checks rejected
+saves, rollback of an actual potion use and kill reward, delayed input, failed
+reconnects and recovery without a checkpoint. See parent `TESTING.md` for evidence.
+
 ### Consumable use and personal effects (G06b)
 
 Input action **3** requests one use of the encoded inventory instance. It shares

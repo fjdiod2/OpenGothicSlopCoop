@@ -273,9 +273,13 @@ bool Gothic::isInGame() const {
   return game!=nullptr;
   }
 
+bool Gothic::isCoopFailed() const {
+  return game && game->failedPlayers()!=0;
+  }
+
 bool Gothic::isInGameAndAlive() const {
   auto pl = Gothic::inst().player();
-  if(pl==nullptr || pl->isDead())
+  if(pl==nullptr || pl->isDead() || isCoopFailed())
     return false;
   return isInGame();
   }
@@ -613,7 +617,7 @@ void Gothic::cancelLoading() {
   }
 
 void Gothic::tick(uint64_t dt) {
-  if(networkPaused) return;
+  if(networkPaused || isCoopFailed()) return;
   if(pendingChapter){
     if(!isInDialog()) {
       onIntroChapter(chapter);

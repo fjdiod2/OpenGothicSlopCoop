@@ -72,6 +72,7 @@ class Gothic final {
 
     bool         isInGame() const;
     bool         isGuest() const;
+    bool         isCoopFailed() const;
     bool         isNetworkPaused() const { return networkPaused; }
     void         setNetworkPaused(bool value) { networkPaused = value; }
     bool         isInGameAndAlive() const;

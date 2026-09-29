@@ -14,6 +14,7 @@
 #include "serialize.h"
 #include "camera.h"
 #include "gothic.h"
+#include "commandline.h"
 
 using namespace Tempest;
 
@@ -333,8 +334,20 @@ void GameSession::setTime(gtime t) {
   wrldTime = t;
   }
 
+bool GameSession::observeCoopFailure() {
+  if(coopFailedPlayers!=0) return true;
+  if(CommandLine::inst().coopEndpoint().role==Coop::Role::Disabled || !wrld) return false;
+  // Death is already authoritative checkpoint/pose state. Latch it for this
+  // world lifetime; disconnects and ordinary unconsciousness do not end play.
+  for(uint64_t id=1;id<=2;++id)
+    if(auto actor=wrld->playerById(id); actor && actor->isDead())
+      coopFailedPlayers |= uint8_t(1u<<(id-1));
+  if(coopFailedPlayers!=0) coopFailureTick=presentationTickCount();
+  return coopFailedPlayers!=0;
+  }
+
 void GameSession::tick(uint64_t dt) {
-  if(!isAuthoritative())
+  if(!isAuthoritative() || observeCoopFailure())
     return;
   wrld->scaleTime(dt);
 
@@ -351,6 +364,9 @@ void GameSession::tick(uint64_t dt) {
 
   vm->tick(dt);
   wrld->tick(dt);
+  // Finish this world step (including simultaneous damage), then freeze before
+  // another controller, script tick or queued world transition can run.
+  if(observeCoopFailure()) return;
   // std::this_thread::sleep_for(std::chrono::milliseconds(60));
 
   if(exitSessionFlg) {
@@ -460,6 +476,7 @@ const WorldStateStorage& GameSession::findStorage(std::string_view name) {
   }
 
 void GameSession::updateAnimation(uint64_t dt) {
+  if(coopFailedPlayers!=0) return;
   if(!isAuthoritative())
     presentationTicks += dt;
   if(wrld)

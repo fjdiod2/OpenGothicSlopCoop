@@ -84,6 +84,14 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
 #endif
   out.Key("simulation_held"); out.Bool(runtimeMode==R_Suspended);
   out.Key("save_status"); str(saveStatus);
+  out.Key("coop_failure"); out.StartObject();
+  const auto session = idle ? game.gameSession() : nullptr;
+  out.Key("failed"); out.Bool(session && session->failedPlayers()!=0);
+  out.Key("players"); out.Uint(session ? session->failedPlayers() : 0);
+  out.Key("tick"); out.Uint64(session ? session->failureTick() : 0);
+  out.Key("events"); out.Uint(handledCoopFailure ? 1 : 0);
+  out.Key("discarded_inputs"); out.Uint64(discardedFailureInputs);
+  out.EndObject();
   const auto boundary = [&](const std::optional<CheckpointBoundary>& value) {
     if(!value) { out.Null(); return; }
     out.StartObject();
@@ -726,6 +734,29 @@ void MainWindow::pollTestControl() {
       actor->stopWalking();
       if(!actor->setPosition(pos)) throw std::runtime_error("Cannot position combat fixture player");
       actor->setDirection(target->position()-pos);
+      }
+    else if(action=="fixture_fall") {
+      auto world=game.world();
+      if(!world->isAuthoritative() || runtimeMode!=R_Suspended || game.isCoopFailed())
+        throw std::runtime_error("Fall fixture requires a held, living authoritative session");
+      std::array<Vec3,2> positions;
+      for(uint64_t id=1;id<=2;++id) {
+        auto actor=world->playerById(id);
+        if(!actor || actor->isDown() || actor->isInAir()) throw std::runtime_error("Fall fixture requires two standing players");
+        auto pos=actor->position();
+        const auto ground=world->physic()->landRay(pos+Vec3(0,200,0),400);
+        if(!ground.hasCol) throw std::runtime_error("No ground for fall fixture");
+        pos.y=ground.v.y+1800.f;
+        positions[id-1]=pos;
+        }
+      clearInput();
+      // Starting positions only. Normal movement physics, landing damage and
+      // original death state decide the result when simulation resumes.
+      for(uint64_t id=1;id<=2;++id) {
+        auto actor=world->playerById(id);
+        actor->stopWalking();
+        if(!actor->setPosition(positions[id-1])) throw std::runtime_error("Cannot place falling player");
+        }
       }
     else if(action=="fixture_monster_target") {
       auto world = game.world();

@@ -63,6 +63,9 @@ class GameSession final {
     void         tick(uint64_t dt);
     uint64_t     tickCount() const { return ticks; }
     bool         isAuthoritative() const { return authority==Authority::Campaign; }
+    bool         observeCoopFailure();
+    uint8_t      failedPlayers() const { return coopFailedPlayers; }
+    uint64_t     failureTick() const { return coopFailureTick; }
     uint64_t     presentationTickCount() const { return isAuthoritative() ? ticks : presentationTicks; }
     void         syncPresentationTick(uint64_t tick) { if(!isAuthoritative()) presentationTicks = tick; }
 
@@ -102,6 +105,8 @@ class GameSession final {
     const Authority               authority = Authority::Campaign;
     std::optional<CheckpointBoundary> loadedCheckpoint;
     uint64_t                      presentationTicks = 0;
+    uint8_t                       coopFailedPlayers = 0;
+    uint64_t                      coopFailureTick = 0;
     Tempest::SoundDevice           sound;
 
     std::unique_ptr<Camera>        cam;
