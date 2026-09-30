@@ -75,6 +75,27 @@ Endpoint joinEndpoint(const std::string& text) {
   return {Role::Guest,port,host};
   }
 
+std::string statusDescription(const NetworkStatus& status) {
+  const auto& reason=status.reason;
+  if(reason=="authentication_failed") return "Invitation rejected. Check the join secret.";
+  if(reason=="engine_mismatch") return "Build mismatch. Rebuild the same fork revision.";
+  if(reason=="protocol_mismatch") return "Protocol mismatch. Update both game builds.";
+  if(reason=="data_mismatch") return "Data mismatch. Match edition, language and mods.";
+  if(reason=="host_full") return "Host already has a connected companion.";
+  if(reason=="dns_timeout") return "Address lookup timed out. Check the hostname.";
+  if(reason=="timeout") return "Connection timed out. Check address and port.";
+  if(reason=="snapshot_timeout") return "World transfer timed out. Retry joining.";
+  if(reason=="connect_error") return "Cannot reach host. Check address and forwarding.";
+  if(status.state=="failed") return "Connection failed. See the launcher log.";
+  if(status.state=="disconnected") return "Connection lost. Press R to rejoin.";
+  if(status.state=="resolving") return "Looking up the host address...";
+  if(status.state=="connecting") return "Connecting to the host...";
+  if(status.state=="authenticating") return "Checking your invitation...";
+  if(status.state=="listening") return "Waiting for the invited companion.";
+  if(status.snapshotState!="ready") return "Waiting for the host world...";
+  return "Connected.";
+  }
+
 struct Session::Impl {
   NetworkStatus state;
   Hello identity;

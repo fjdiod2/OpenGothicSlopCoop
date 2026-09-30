@@ -39,6 +39,8 @@ struct NetworkStatus {
   bool inputHeld = false;
   };
 
+std::string statusDescription(const NetworkStatus& status);
+
 struct Snapshot {
   uint64_t generation = 0, revision = 0;
   Bytes data;

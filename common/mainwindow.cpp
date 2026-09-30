@@ -286,11 +286,17 @@ void MainWindow::paintEvent(PaintEvent& event) {
   renderer.dbgDraw(p);
 
   const float scale = Gothic::interfaceScale(this);
-  if(Gothic::inst().isGuest() && st==Gothic::LoadState::Idle &&
-     (canRejoinNetwork() || network.status().snapshotState!="ready")) {
-    auto& fnt = Resources::font(scale);
-    fnt.drawText(p,20,h()-80,canRejoinNetwork() ? "Connection lost. Press R to rejoin" :
-                                               "Waiting for the host world");
+  if(CommandLine::inst().coopEndpoint().role!=Coop::Role::Disabled && st==Gothic::LoadState::Idle) {
+    const auto& status=network.status();
+    if(!networkPreparation.empty() || status.state=="failed" || status.state=="listening" ||
+       (Gothic::inst().isGuest() && (canRejoinNetwork() || status.snapshotState!="ready"))) {
+      auto& fnt=Resources::font(scale);
+      const auto message=networkPreparation.empty() ? Coop::statusDescription(status) :
+                         networkPreparation=="fingerprinting" ? "Checking game data..." :
+                         "Game data check failed. See launcher log.";
+      fnt.drawText(p,20,h()-105,message);
+      if(canRejoinNetwork()) fnt.drawText(p,20,h()-80,"Press R to retry; restart Join to change address.");
+      }
     }
   if(Gothic::inst().isCoopFailed() && st==Gothic::LoadState::Idle) {
     auto& fnt = Resources::font(scale);

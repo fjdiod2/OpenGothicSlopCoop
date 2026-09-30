@@ -119,6 +119,7 @@ void MainWindow::tickNetwork() {
   if(fingerprintJob.valid() && fingerprintJob.wait_for(std::chrono::seconds(0))==std::future_status::ready) {
     try {
       networkIdentity = fingerprintJob.get();
+      Tempest::Log::i("Coop: build=",Coop::buildIdentity()," data=",Coop::hexFingerprint(networkIdentity.gameData));
       networkPreparation.clear();
       network.start(CommandLine::inst().coopEndpoint(),networkIdentity,Tempest::Application::tickCount());
       }
@@ -195,7 +196,7 @@ void MainWindow::tickNetwork() {
     }
   if(networkEvent!=status.events) {
     networkEvent = status.events;
-    Tempest::Log::i("Coop: ",status.state," port=",status.port," reason=",status.reason);
+    Tempest::Log::i("Coop: ",status.state," port=",status.port," reason=",status.reason," - ",Coop::statusDescription(status));
     }
   }
 

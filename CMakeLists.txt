@@ -105,6 +105,8 @@ set(ZK_ENABLE_DEPRECATION      OFF CACHE INTERNAL "")
 
 add_subdirectory(lib/ZenKit)
 target_link_libraries(${PROJECT_NAME} zenkit)
+add_executable(create-coop-arena EXCLUDE_FROM_ALL scripts/create-coop-arena.cpp)
+target_link_libraries(create-coop-arena PRIVATE zenkit)
 
 # dmusic
 set(DM_BUILD_STATIC            ON  CACHE INTERNAL "")

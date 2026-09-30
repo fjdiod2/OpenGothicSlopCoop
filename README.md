@@ -185,3 +185,8 @@ Rendering distance is not customizable.
 | `-ms <boolean>`        | explicitly enable or disable meshlets                            |
 | `-aa <number>`         | enable anti-aliasing (number = 1-2, 2 = most expensive AA)       |
 | `-window`              | windowed debugging mode (not to be used for playing)             |
+
+## Co-op fork playtest
+
+See [local Mac/Windows builds and independent Host/Join launchers](docs/remote-playtest.md).
+Both players need the same fork revision and their own compatible game data.

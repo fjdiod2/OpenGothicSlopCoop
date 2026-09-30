@@ -27,6 +27,7 @@ jobs:
         run: cmake -S tests/protocol -B build-protocol -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
       - if: runner.os != 'Windows'
         run: cmake -S tests/protocol -B build-protocol -DCMAKE_BUILD_TYPE=Release
+      - run: python tests/launchers/test_launchers.py
       - run: cmake --build build-protocol --config Release --parallel 4
       - run: ctest --test-dir build-protocol -C Release --output-on-failure --output-junit results.xml
       - uses: actions/upload-artifact@v6
