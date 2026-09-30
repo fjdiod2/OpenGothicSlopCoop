@@ -16,7 +16,7 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 14;
+inline constexpr uint16_t ProtocolVersion = 15;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
@@ -39,7 +39,7 @@ inline constexpr size_t PlayerStateBytes = 9+ 2*TalentCount*4+3*4+8+HeldSlotByte
 enum class MessageType : uint16_t {
   Hello = 1, Welcome = 2, Input = 3, StateAck = 4, Reject = 5, Accepted = 6,
   SnapshotBegin = 7, SnapshotChunk = 8, SnapshotEnd = 9, SnapshotReady = 10,
-  Poses = 11, PoseAck = 12
+  Poses = 11, PoseAck = 12, Heartbeat = 13
   };
 
 enum class RejectReason : uint16_t {
@@ -156,10 +156,11 @@ struct Poses {
   std::array<PlayerState,2> personal;
   bool operator==(const Poses&) const = default;
   };
+struct Heartbeat { bool operator==(const Heartbeat&) const = default; };
 struct PoseAck { bool operator==(const PoseAck&) const = default; };
 
 using Payload = std::variant<Hello,Welcome,Input,StateAck,Reject,Accepted,
-                             SnapshotBegin,SnapshotChunk,SnapshotEnd,SnapshotReady,Poses,PoseAck>;
+                             SnapshotBegin,SnapshotChunk,SnapshotEnd,SnapshotReady,Poses,PoseAck,Heartbeat>;
 
 struct Message {
   uint64_t generation = 0;

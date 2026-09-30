@@ -515,6 +515,39 @@ void inputDisconnect() {
   REQUIRE(state.port!=0); // The host listener survives the lost controller.
   }
 
+void heartbeat() {
+  for(bool stalledGuest: {false,true}) {
+    Session host,guest;
+    host.start(invited({Role::Host,0}),identity(),0);
+    guest.start(invited({Role::Guest,host.status().port}),identity(),0);
+    pump(host,guest,[&] { return host.status().state=="connected"; });
+    const auto generation=host.status().generation;
+    REQUIRE(host.bindCompanion(generation) && host.sendSnapshot(generation,1,Bytes{1}));
+    pump(host,guest,[&] { return guest.status().snapshotState=="received"; });
+    REQUIRE(guest.takeSnapshot() && guest.snapshotLoaded(generation,1));
+    pump(host,guest,[&] { return host.status().snapshotState=="ready"; });
+    // No simulation poses/input: pause or an asynchronous save must stay alive.
+    host.holdInput(true);
+    uint64_t now=1;
+    for(unsigned interval=0;interval<24;++interval) {
+      now+=500;
+      unsigned frames=0;
+      pump(host,guest,[&] { return ++frames==5; },now);
+      REQUIRE(host.status().state=="connected" && guest.status().state=="connected");
+      }
+    REQUIRE(host.status().inputReceived==0 && guest.status().posesReceived==0);
+    REQUIRE(guest.sendInput({Forward}));
+    pump(host,guest,[&] { return host.status().inputReceived==1; },now);
+    auto& active=stalledGuest ? host : guest;
+    // Leave TCP open but stop the other application's ticks entirely.
+    for(unsigned i=0;i<5;++i) active.tick(now);
+    active.tick(now+Session::IdleTimeoutMs);
+    REQUIRE(active.status().reason=="connection_stalled" && active.status().timeouts==1);
+    REQUIRE(active.status().generation==0 && active.status().boundPlayer==0);
+    REQUIRE(active.status().snapshotState=="none" && !active.takeInput());
+    }
+  }
+
 void saveInputHold() {
   Session host, guest;
   host.start({Role::Host,0},identity(),0);
@@ -850,6 +883,7 @@ int main(int argc, char** argv) {
     else if(name=="input-roundtrip") inputRoundtrip();
     else if(name=="input-validation") inputValidation();
     else if(name=="input-disconnect") inputDisconnect();
+    else if(name=="heartbeat") heartbeat();
     else if(name=="save-input-hold") saveInputHold();
     else if(name=="load-generation") loadGeneration();
     else if(name=="poses-roundtrip") posesRoundtrip();

@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 14 (cosmetic emotes)
+# Co-op wire protocol, version 15 (connection heartbeats)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -14,6 +14,9 @@ connect on macOS loopback. N05 binds the host's saved companion to that connecti
 N07 makes the guest a presentation-only process; N08 transfers a host checkpoint,
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
+
+Version 15 adds snapshot-ready heartbeats and a five-second idle deadline.
+Version-14 peers are rejected; checkpoints remain version 56.
 
 Version 14 adds an emote byte to Input (111 bytes total) and nine bytes to each
 personal record (237 bytes). Version-13 peers are rejected. Checkpoints remain
@@ -77,7 +80,7 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `14` |
+| 8 | 2 | Version | Exactly `15` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
@@ -107,6 +110,7 @@ animation-name/unused slots specified below.
 | 10 | `SnapshotReady` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
 | 11 | `Poses` | Host → guest | 2,154–61,258 | `nonzero / 2 / 0 / nonzero` |
 | 12 | `PoseAck` | Guest → host | 44 | `nonzero / 2 / 0 / nonzero` |
+| 13 | `Heartbeat` | Both | 44 | `nonzero / 0 / 0 / 0` |
 
 ### Hello
 
@@ -1125,7 +1129,7 @@ This 111-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 0000006f 000e 0003
+4f474350 0000006f 000f 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
@@ -1501,3 +1505,15 @@ companion is supported. Possession of the secret authorizes that companion, not 
 separate account or individual identity; rotate it before inviting someone else.
 A saturated public listener can still be denied service; no matchmaking/relay or
 network-level DoS protection is implied.
+
+## Ready-session liveness (R08)
+
+Version 15 adds Heartbeat (type 13): no payload, current nonzero generation,
+zero player/sequence/revision. Only a snapshot-ready accepted session accepts
+it. Each side queues one per second independently of world simulation, menus and
+asynchronous saves. Any valid incoming frame refreshes liveness. Five seconds
+without a valid frame closes the ready session with `connection_stalled`, discards
+queued input and binding, and releases the host controller. Rejoin receives a new
+generation and snapshot. Heartbeats do not acknowledge or repeat gameplay intents.
+The initial transfer retains its separate 180-second total deadline; it is not
+subject to the ready-session five-second limit. Handshake remains five seconds.

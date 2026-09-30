@@ -146,3 +146,24 @@ use equivalent installations rather than disabling checks. Authentication failur
 means the invitation differs. Refused connections/timeouts need the address, live
 Host listener, port forwarding and firewall checked. A port check from the same
 LAN is not the required two-person internet test.
+
+## Local WAN simulation
+
+Wire version 15 uses one-second heartbeats after snapshot activation. Five seconds
+without valid incoming traffic releases the remote controller and reports a stalled
+connection; press R to rejoin. Healthy paused worlds and asynchronous saves still
+exchange heartbeats. Initial world transfer keeps a separate 180-second deadline.
+
+The Mac's encrypted arena test passed simulated 50/100/200 ms RTT with seeded
+jitter and 256 KiB/s per direction, interrupted initial transfer, a held-key stall,
+save/load interruptions, repeated joins and full process restart. The approximately
+51-KB arena snapshot also recovered at 64 KiB/s; launch-to-ready took 3.6 seconds.
+The existing transfer deadline was sufficient for these measurements. Large campaign
+snapshots and slower links still need measurement in the actual playtest.
+
+Observed guest movement response was approximately 0.47/0.48/0.64 seconds at those
+RTTs. These are coarse automated observations including polling, frame scheduling
+and animation startup, not isolated network latency or a claim of comfortable
+controls. Correctness and responsiveness are separate results; human acceptance
+and any decision about prediction remain R09. Native Windows execution and actual
+router ingress are also outstanding.

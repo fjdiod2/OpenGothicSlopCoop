@@ -49,6 +49,8 @@ struct Snapshot {
 class Session final {
   public:
     static constexpr uint64_t HandshakeTimeoutMs = 5000;
+    static constexpr uint64_t HeartbeatIntervalMs = 1000;
+    static constexpr uint64_t IdleTimeoutMs = 5000;
     static constexpr size_t MaxPeers = 4;
     static constexpr uint64_t SnapshotTimeoutMs = 180000;
 

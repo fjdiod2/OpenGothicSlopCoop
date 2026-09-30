@@ -41,7 +41,7 @@ Message input(uint64_t sequence=9) {
 
 // Independent literal from docs/coop-protocol.md, not constructed by the codec.
 Bytes goldenInput() {
-  return hex("4f4743500000006f000e0003"
+  return hex("4f4743500000006f000f0003"
              "0102030405060708" "0000000000000002"
              "0000000000000009" "0000000000000000"
              "00000081fffb0064" "0000000000000000" "0000000000000000" "000000000000000000" "00000000000000000000000000000000000000000000000000000000000000000000");
@@ -84,7 +84,8 @@ std::vector<Message> examples() {
     {4,2,0,1,SnapshotEnd{}},
     {4,2,0,1,SnapshotReady{}},
     {4,2,0,2,samplePoses()},
-    {4,2,0,2,PoseAck{}}
+    {4,2,0,2,PoseAck{}},
+    {4,0,0,0,Heartbeat{}}
     };
   }
 
@@ -109,7 +110,7 @@ void drain(Decoder& decoder, const std::vector<Message>& expected) {
 
 void pickupTransfers() {
   const Message request {4,2,9,0,Input{0,0,0,123,33}};
-  const auto literal = hex("4f4743500000006f000e0003"
+  const auto literal = hex("4f4743500000006f000f0003"
                            "0000000000000004" "0000000000000002"
                            "0000000000000009" "0000000000000000"
                            "0000000000000000" "000000000000007b" "0000000000000021" "000000000000000000" "00000000000000000000000000000000000000000000000000000000000000000000");
@@ -153,7 +154,7 @@ void pickupTransfers() {
 
 void weaponEquipment() {
   const Message request {4,2,9,0,Input{0,0,0,0,0,101,1}};
-  const auto literal = hex("4f4743500000006f000e0003"
+  const auto literal = hex("4f4743500000006f000f0003"
                            "0000000000000004" "0000000000000002"
                            "0000000000000009" "0000000000000000"
                            "0000000000000000" "0000000000000000" "0000000000000000"
@@ -342,7 +343,7 @@ void emotes() {
 
 void golden() {
   const auto pose = encode({4,2,0,2,samplePoses()});
-  const auto prefix = hex("4f4743500000087c000e000b"
+  const auto prefix = hex("4f4743500000087c000f000b"
                           "0000000000000004" "0000000000000002"
                           "0000000000000000" "0000000000000002"
                           "000000000000007b" "0000000000000064" "0000000000000000"
@@ -418,7 +419,7 @@ void messageTypes() {
     }
   // A second literal covers the variable fingerprints and byte order of a
   // different message type, so matching encode/decode bugs cannot hide it.
-  const auto hello = hex("4f4743500000006c000e0001"
+  const auto hello = hex("4f4743500000006c000f0001"
                          "00000000000000000000000000000000"
                          "00000000000000000000000000000000"
                          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -518,7 +519,8 @@ void malformedHeader() {
       const size_t offset = 12+field*8;
       bytes = encode(message);
       std::fill_n(bytes.begin()+std::ptrdiff_t(offset),8,uint8_t(0));
-      const bool needsZero = unbound || (std::holds_alternative<Accepted>(message.payload) ? field!=0 :
+      const bool needsZero = unbound || ((std::holds_alternative<Accepted>(message.payload) ||
+                                         std::holds_alternative<Heartbeat>(message.payload)) ? field!=0 :
                                         isInput ? field==3 : field==2);
       if(needsZero)
         bytes[offset+7] = 1;

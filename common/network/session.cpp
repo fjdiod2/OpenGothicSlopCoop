@@ -84,6 +84,7 @@ std::string statusDescription(const NetworkStatus& status) {
   if(reason=="host_full") return "Host already has a connected companion.";
   if(reason=="dns_timeout") return "Address lookup timed out. Check the hostname.";
   if(reason=="timeout") return "Connection timed out. Check address and port.";
+  if(reason=="connection_stalled") return "Connection stalled. Press R to rejoin.";
   if(reason=="snapshot_timeout") return "World transfer timed out. Retry joining.";
   if(reason=="connect_error") return "Cannot reach host. Check address and forwarding.";
   if(status.state=="failed") return "Connection failed. See the launcher log.";
@@ -109,7 +110,7 @@ struct Session::Impl {
     std::unique_ptr<TlsStream> tls;
     Decoder decoder;
     WriteQueue output;
-    uint64_t started = 0;
+    uint64_t started = 0, lastReceive = 0, lastHeartbeat = 0;
     uint64_t generation = 0;
     bool bound = false;
     enum Transfer { None, Sending, Receiving, Available, Loading, AwaitReady, Ready } transfer = None;
@@ -198,6 +199,12 @@ struct Session::Impl {
 
   bool receiveMessage(Peer& peer, const Message& message, uint64_t now) {
     const auto type = messageType(message);
+    if(type==MessageType::Heartbeat) {
+      if(peer.stage!=Peer::Connected || peer.transfer!=Peer::Ready || message.generation!=peer.generation) {
+        event("invalid_heartbeat"); return false;
+        }
+      return true;
+      }
     if(type==MessageType::Poses || type==MessageType::PoseAck) {
       if(peer.stage!=Peer::Connected || peer.transfer!=Peer::Ready ||
          message.generation!=peer.generation || message.player!=PlayerIdentity::Companion) {
@@ -261,6 +268,7 @@ struct Session::Impl {
           event("invalid_snapshot"); return false;
           }
         peer.transfer = Peer::Ready;
+        peer.lastReceive = peer.lastHeartbeat = now;
         state.snapshotState = "ready";
         event("snapshot_ready");
         return true;
@@ -412,6 +420,7 @@ struct Session::Impl {
         peer.decoder.feed(std::span(buffer).first(size_t(count)));
         while(auto message = peer.decoder.pop()) {
           if(!receiveMessage(peer,*message,now)) return false;
+          peer.lastReceive = now;
           if(peer.stage==Peer::Closing) break;
           }
         }
@@ -424,6 +433,16 @@ struct Session::Impl {
           return false;
           }
         }
+      }
+    if(peer.transfer==Peer::Ready) {
+      if(now-peer.lastReceive>=IdleTimeoutMs) {
+        ++state.timeouts;
+        event("connection_stalled");
+        return false;
+        }
+      if(now-peer.lastHeartbeat>=HeartbeatIntervalMs &&
+         peer.output.enqueue({peer.generation,0,0,0,Heartbeat{}}))
+        peer.lastHeartbeat = now;
       }
     if(peer.transfer==Peer::Sending) {
       for(size_t n=0; n<4 && peer.output.pendingBytes()<128*1024; ++n) {
@@ -522,6 +541,7 @@ bool Session::snapshotLoaded(uint64_t generation, uint64_t revision) {
     if(peer->transfer!=Impl::Peer::Loading || peer->generation!=generation || peer->revision!=revision) continue;
     if(!peer->output.enqueue({generation,PlayerIdentity::Companion,0,revision,SnapshotReady{}})) return false;
     peer->transfer = Impl::Peer::Ready;
+    peer->lastReceive = peer->lastHeartbeat = impl->now;
     impl->state.snapshotState = "ready";
     impl->event("snapshot_loaded");
     return true;

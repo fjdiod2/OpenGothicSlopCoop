@@ -49,6 +49,7 @@ size_t bodySize(MessageType type) {
     case MessageType::SnapshotChunk: return 8; // Offset prefix; bounded data follows.
     case MessageType::SnapshotEnd:
     case MessageType::SnapshotReady:
+    case MessageType::Heartbeat:
     case MessageType::PoseAck: return 0;
     case MessageType::Poses: return 62+2*ActorPoseBytes+2*CombatStateBytes+2+2*PlayerStateBytes;
     }
@@ -75,6 +76,7 @@ void validateHeader(const Message& message, MessageType type) {
     case MessageType::Input:
       valid = message.generation!=0 && message.player!=0 && message.sequence!=0 && message.revision==0;
       break;
+    case MessageType::Heartbeat:
     case MessageType::Accepted:
       valid = message.generation!=0 && message.player==0 && message.sequence==0 && message.revision==0;
       break;
@@ -232,6 +234,7 @@ Message readHeader(std::span<const uint8_t> bytes) {
     case MessageType::SnapshotEnd: message.payload = SnapshotEnd{}; break;
     case MessageType::SnapshotReady: message.payload = SnapshotReady{}; break;
     case MessageType::Poses: message.payload = Poses{}; break;
+    case MessageType::Heartbeat: message.payload = Heartbeat{}; break;
     case MessageType::PoseAck: message.payload = PoseAck{}; break;
     }
   return message;
@@ -251,6 +254,7 @@ Message decode(std::span<const uint8_t> bytes) {
     case MessageType::Welcome:
     case MessageType::SnapshotEnd:
     case MessageType::SnapshotReady:
+    case MessageType::Heartbeat:
     case MessageType::PoseAck:
       break;
     case MessageType::Poses: {
@@ -374,6 +378,7 @@ MessageType messageType(const Message& message) {
   if(std::holds_alternative<SnapshotEnd>(message.payload)) return MessageType::SnapshotEnd;
   if(std::holds_alternative<SnapshotReady>(message.payload)) return MessageType::SnapshotReady;
   if(std::holds_alternative<Poses>(message.payload)) return MessageType::Poses;
+  if(std::holds_alternative<Heartbeat>(message.payload)) return MessageType::Heartbeat;
   if(std::holds_alternative<PoseAck>(message.payload)) return MessageType::PoseAck;
   invalid(ProtocolErrorCode::Type,"Missing co-op payload");
   }
@@ -408,6 +413,7 @@ Bytes encode(const Message& message) {
     case MessageType::Welcome:
     case MessageType::SnapshotEnd:
     case MessageType::SnapshotReady:
+    case MessageType::Heartbeat:
     case MessageType::PoseAck:
       break;
     case MessageType::Poses: {
