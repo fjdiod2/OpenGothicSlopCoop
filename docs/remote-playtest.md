@@ -8,6 +8,15 @@ The host owns story state and checkpoints; the guest controls the saved companio
 
 ## Build locally
 
+For the current CI verification, run **Co-op Windows tests** from
+`.github/workflows/coop-tests.yml`. It runs on pushes to `coop/**` and also supports
+manual runs. It compiles only the standalone test executables and their required
+dependencies, then runs the protocol/socket and launcher tests on Windows.
+Mac/Linux CI tests and the full game build are deferred for now. The separate
+**Build** workflow does not run on a `coop/**` branch push; leave it untriggered
+for this verification. Its existing master/tag/PR triggers still apply separately.
+The commands below are for building the game when preparing to play.
+
 Use the agreed **fork URL and full commit ID**, not an upstream release binary:
 
 ```sh

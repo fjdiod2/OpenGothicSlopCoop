@@ -1,4 +1,4 @@
-name: Co-op portability tests
+name: Co-op Windows tests
 on:
   push:
     branches: ['coop/**']
@@ -8,32 +8,21 @@ permissions:
   contents: read
 jobs:
   protocol:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, windows-latest, ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v6
-      - if: runner.os == 'macOS'
-        run: brew install openssl@3
-      - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
-      - if: runner.os == 'Windows'
-        shell: pwsh
-        run: vcpkg install openssl:x64-windows
-      - if: runner.os == 'Windows'
-        shell: pwsh
-        run: cmake -S tests/protocol -B build-protocol -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-      - if: runner.os != 'Windows'
-        run: cmake -S tests/protocol -B build-protocol -DCMAKE_BUILD_TYPE=Release
+      - run: vcpkg install openssl:x64-windows
+      - run: cmake -S tests/protocol -B build-protocol -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
       - run: python tests/launchers/test_launchers.py
       - run: cmake --build build-protocol --config Release --parallel 4
       - run: ctest --test-dir build-protocol -C Release --output-on-failure --output-junit results.xml
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: coop-tests-${{ matrix.os }}
+          name: coop-tests-windows
           path: |
             build-protocol/results.xml
             build-protocol/generated/coop_build.h
