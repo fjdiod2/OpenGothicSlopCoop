@@ -1466,3 +1466,38 @@ all session sockets are RAII-owned and close on restart, exception or destructio
 The asset-free connection tests are enabled on all three CI operating systems,
 including real handshake, snapshot, timeout, disconnect and reconnect cases.
 [Winsock startup contract](https://learn.microsoft.com/en-us/windows/win32/winsock/initializing-winsock).
+
+## R05 authenticated invitation transport
+
+Human remote sessions use OpenSSL 3 **TLS 1.3**, with a 256-bit random external PSK
+(invitation secret), `TLS_AES_128_GCM_SHA256`, and X25519/P-256 key exchange. The
+[OpenSSL external-PSK callbacks](https://docs.openssl.org/3.5/man3/SSL_CTX_set_psk_client_callback/)
+implement authentication; there is no custom challenge/HMAC protocol. All co-op
+frames, including compatibility fingerprints and snapshots, travel inside TLS.
+Authentication completes before Hello is decoded, companion authority is granted,
+or a save is sent/loaded. Missing, incorrect and replayed credentials cannot enter
+the session. OpenSSL verifies transcript binders and Finished; fresh key exchange
+prevents replay of a captured conversation. TLS tickets, session caching and early
+data (0-RTT) are disabled. Reconnect always authenticates afresh and still gets a
+new application session generation. The invitation must be shared privately.
+
+Supply `OPENGOTHIC_JOIN_SECRET` in the game process environment, as 64 hex digits
+representing 32 cryptographically random bytes. Human launchers generate/read it;
+never use a memorable password or put the value in command arguments or logs.
+The fixed TLS PSK identity is public and contains no secret. Errors expose only
+`authentication_failed` or invalid-format guidance. Local test state reports
+`encrypted` but never the key. Key bytes in the TLS context are cleansed on release.
+External listeners and resolved external join destinations refuse an empty secret.
+Legacy asset-free/engine tests may still use plaintext only on 127.0.0.0/8; human
+launchers always use authenticated TLS, including loopback.
+
+Unauthenticated peers cannot occupy the companion slot. The existing four-peer
+limit, four accepts per tick and handshake deadline also bound TLS admissions.
+The custom OpenSSL socket BIO preserves pointer-sized Windows handles, SIGPIPE
+suppression, retry semantics and per-peer 64-KiB read/write budgets per tick.
+The game cannot wait on TLS socket I/O. Protocol queues retain their existing
+limits; SSL write retries retain the same front frame until accepted. One invited
+companion is supported. Possession of the secret authorizes that companion, not a
+separate account or individual identity; rotate it before inviting someone else.
+A saturated public listener can still be denied service; no matchmaking/relay or
+network-level DoS protection is implied.

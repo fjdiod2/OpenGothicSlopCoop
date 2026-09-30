@@ -10,6 +10,7 @@
 
 #include "socket.h"
 #include "resolve.h"
+#include "tls.h"
 
 namespace Coop {
 namespace {
@@ -80,9 +81,11 @@ struct Session::Impl {
   uint64_t nextGeneration = 0;
   uint64_t now = 0, resolveStarted = 0;
   std::shared_ptr<Net::Resolution> resolution;
+  std::shared_ptr<TlsContext> tlsContext;
   struct Peer {
-    enum Stage { Connecting, Handshake, AcceptedSending, Connected, Closing } stage = Handshake;
+    enum Stage { Connecting, Authenticating, Handshake, AcceptedSending, Connected, Closing } stage = Handshake;
     Socket socket;
+    std::unique_ptr<TlsStream> tls;
     Decoder decoder;
     WriteQueue output;
     uint64_t started = 0;
@@ -102,6 +105,8 @@ struct Session::Impl {
   std::vector<std::unique_ptr<Peer>> peers;
 
   void connectTo(const sockaddr_in& addr,uint64_t started) {
+    if(!tlsContext && (ntohl(addr.sin_addr.s_addr)>>24)!=127)
+      throw std::runtime_error("External connections require a join secret");
     auto socket=std::make_unique<Socket>(::socket(AF_INET,SOCK_STREAM,0));
     if(socket->fd==Net::Invalid) throw Net::failure("Create co-op socket");
     nonblocking(socket->fd);
@@ -109,6 +114,7 @@ struct Session::Impl {
     if(result<0 && !Net::connecting()) throw Net::failure("Connect to co-op host");
     auto peer=std::make_unique<Peer>(socket->fd,started);
     socket->fd=Net::Invalid;
+    if(tlsContext) peer->tls=std::make_unique<TlsStream>(tlsContext,peer->socket.fd,false);
     peer->stage=Peer::Connecting;
     if(!peer->output.enqueue({0,0,0,0,identity})) throw std::runtime_error("Cannot queue Hello");
     peers.push_back(std::move(peer));
@@ -160,7 +166,11 @@ struct Session::Impl {
         continue; // RAII closes the excess socket; never grow an unbounded queue.
         }
       nonblocking(fd);
-      if(occupied()) reject(*peer,RejectReason::Full,now);
+      if(tlsContext) {
+        peer->tls=std::make_unique<TlsStream>(tlsContext,fd,true);
+        peer->stage=Peer::Authenticating;
+        }
+      else if(occupied()) reject(*peer,RejectReason::Full,now);
       peers.push_back(std::move(peer));
       }
     }
@@ -337,6 +347,7 @@ struct Session::Impl {
     }
 
   bool pump(Peer& peer, uint64_t now) {
+    if(peer.tls) peer.tls->beginTick();
     if(peer.transfer!=Peer::None && peer.transfer!=Peer::Ready && now>=peer.deadline) {
       ++state.timeouts;
       event("snapshot_timeout");
@@ -351,15 +362,22 @@ struct Session::Impl {
       const int result = Net::connected(peer.socket.fd);
       if(result==0) return true;
       if(result<0) { event("connect_error"); return false; }
-      peer.stage = Peer::Handshake;
-      state.state = "handshaking";
+      peer.stage = peer.tls ? Peer::Authenticating : Peer::Handshake;
+      state.state = peer.tls ? "authenticating" : "handshaking";
+      }
+    if(peer.stage==Peer::Authenticating) {
+      const int result=peer.tls->handshake();
+      if(result==0) return true;
+      if(result<0) { ++state.rejected; event("authentication_failed"); return false; }
+      peer.stage=Peer::Handshake;
+      if(state.role==Role::Guest) state.state="handshaking";
       }
     // Bound work per frame even if a local peer continuously writes.
     std::array<uint8_t,16384> buffer;
     for(size_t calls=0; calls<4 && peer.stage!=Peer::Closing; ++calls) {
-      const auto count = Net::receive(peer.socket.fd,buffer);
+      const auto count = peer.tls ? peer.tls->read(buffer) : Net::receive(peer.socket.fd,buffer);
       if(count<0) {
-        if(wouldBlock()) break;
+        if(peer.tls ? peer.tls->blocked() : wouldBlock()) break;
         event("read_error");
         return false;
         }
@@ -405,8 +423,8 @@ struct Session::Impl {
       }
     for(size_t calls=0; calls<4 && !peer.output.front().empty(); ++calls) {
       auto bytes = peer.output.front();
-      const auto count = Net::send(peer.socket.fd,bytes);
-      if(count<0 && wouldBlock()) break;
+      const auto count = peer.tls ? peer.tls->write(bytes) : Net::send(peer.socket.fd,bytes);
+      if(count<0 && (peer.tls ? peer.tls->blocked() : wouldBlock())) break;
       if(count<=0) { event("write_error"); return false; }
       peer.output.consume(size_t(count));
       }
@@ -591,6 +609,10 @@ void Session::start(Endpoint endpoint, const Hello& identity, uint64_t now) {
   if(endpoint.role==Role::Disabled) return;
   try {
     Net::initialize();
+    if(!endpoint.secret.empty()) self.tlsContext=std::make_shared<TlsContext>(endpoint.secret);
+    self.state.encrypted=bool(self.tlsContext);
+    if(endpoint.role==Role::Host && !self.tlsContext && (ntohl(address(endpoint.port,endpoint.address).sin_addr.s_addr)>>24)!=127)
+      throw std::runtime_error("External listeners require a join secret");
     std::random_device random;
     self.nextGeneration = (uint64_t(random())<<32) | uint64_t(random());
     if(endpoint.role==Role::Guest) {

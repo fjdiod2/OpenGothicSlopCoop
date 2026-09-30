@@ -11,6 +11,7 @@ struct Endpoint {
   Role role = Role::Disabled;
   uint16_t port = 0;
   std::string address = "127.0.0.1";
+  std::string secret = {};
   };
 
 // Bare host PORT retains loopback defaults; explicit IPv4:PORT opts into LAN/WAN.
@@ -23,6 +24,7 @@ struct NetworkStatus {
   std::string reason;
   uint16_t port = 0;
   std::string address;
+  bool encrypted = false;
   uint64_t generation = 0;
   uint64_t boundPlayer = 0, bindingRevision = 0, bindings = 0;
   uint64_t accepted = 0, rejected = 0, timeouts = 0, disconnected = 0;

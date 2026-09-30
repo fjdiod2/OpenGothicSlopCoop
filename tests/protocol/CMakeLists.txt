@@ -11,7 +11,7 @@ add_executable(coop-fingerprint-tests fingerprint_test.cpp ../../common/network/
 coop_identity(coop-fingerprint-tests)
 set(COOP_TEST_TARGETS coop-protocol-tests coop-object-tests coop-interpolation-tests coop-fingerprint-tests)
 add_executable(coop-connection-tests connection_test.cpp ../../common/network/protocol.cpp
-                 ../../common/network/session.cpp ../../common/network/fingerprint.cpp)
+                 ../../common/network/session.cpp ../../common/network/fingerprint.cpp ../../common/network/tls.cpp)
 list(APPEND COOP_TEST_TARGETS coop-connection-tests)
 coop_identity(coop-connection-tests)
 if(WIN32)
@@ -51,7 +51,7 @@ foreach(case emotes dialogue-intents story-projection golden pickup-transfers we
   add_test(NAME protocol-${case} COMMAND coop-protocol-tests ${case})
   set_tests_properties(protocol-${case} PROPERTIES TIMEOUT 20)
 endforeach()
-foreach(case endpoints addresses connection rejections timeout binding binding-authority snapshot-roundtrip snapshot-failures input-roundtrip input-validation input-disconnect poses-roundtrip poses-validation rejoin-queues rejoin-stale save-input-hold load-generation)
+foreach(case authentication endpoints addresses connection rejections timeout binding binding-authority snapshot-roundtrip snapshot-failures input-roundtrip input-validation input-disconnect poses-roundtrip poses-validation rejoin-queues rejoin-stale save-input-hold load-generation)
   add_test(NAME connection-${case} COMMAND coop-connection-tests ${case})
   set_tests_properties(connection-${case} PROPERTIES TIMEOUT 20)
 endforeach()

@@ -73,14 +73,66 @@ void endpoints() {
     throws([&] { joinEndpoint(text); });
   }
 
+Endpoint invited(Endpoint endpoint) {
+  endpoint.secret=std::string(64,'1'); // Synthetic fixture, never a human invitation.
+  return endpoint;
+  }
+
+void authentication() {
+  Session host,guest,other;
+  host.start(hostEndpoint("0.0.0.0:0"),identity(),0);
+  REQUIRE(host.status().state=="failed" && host.status().reason.find("require a join secret")!=std::string::npos);
+  host.start(invited(hostEndpoint("0.0.0.0:0")),identity(),0);
+  REQUIRE(host.status().state=="listening" && host.status().encrypted);
+  const auto port=host.status().port;
+  // Plaintext or incorrect PSK must never claim a slot, bind, or obtain a save.
+  guest.start({Role::Guest,port},identity(),0);
+  pump(host,guest,[&] { return host.status().rejected>0; });
+  REQUIRE(host.status().reason=="authentication_failed");
+  REQUIRE(host.status().accepted==0 && host.status().boundPlayer==0 && host.status().snapshotBytes==0);
+  auto wrong=invited({Role::Guest,port}); wrong.secret[0]='2';
+  guest.start(wrong,identity(),0);
+  pump(host,guest,[&] { return host.status().rejected>1; });
+  REQUIRE(host.status().accepted==0 && host.status().snapshotBytes==0);
+  std::vector<std::unique_ptr<Socket>> silent;
+  for(size_t i=0;i<Session::MaxPeers+3;++i) {
+    auto peer=std::make_unique<Socket>(); peer->connect(port);
+    silent.push_back(std::move(peer)); host.tick(1);
+    REQUIRE(host.status().peers<=Session::MaxPeers && host.status().boundPlayer==0);
+    }
+  host.tick(Session::HandshakeTimeoutMs+2);
+  REQUIRE(host.status().peers==0 && host.status().snapshotBytes==0);
+  uint64_t previous=0;
+  for(unsigned cycle=0;cycle<3;++cycle) {
+    guest.start(invited({Role::Guest,port}),identity(),0);
+    pump(host,guest,[&] { return host.status().state=="connected" && guest.status().state=="connected"; });
+    REQUIRE(guest.status().encrypted);
+    const auto generation=host.status().generation;
+    REQUIRE(generation!=previous && host.bindCompanion(generation));
+    REQUIRE(host.sendSnapshot(generation,1,Bytes(100000,0x9b)));
+    pump(host,guest,[&] { return guest.status().snapshotState=="received"; });
+    const auto snapshot=guest.takeSnapshot();
+    REQUIRE(snapshot && snapshot->data==Bytes(100000,0x9b));
+    REQUIRE(guest.snapshotLoaded(generation,1));
+    pump(host,guest,[&] { return host.status().snapshotState=="ready"; });
+    other.start(invited({Role::Guest,port}),identity(),0);
+    pump(host,other,[&] { guest.tick(1); return other.status().state=="rejected"; });
+    REQUIRE(other.status().reason=="host_full" && host.status().boundPlayer==2);
+    guest.start({},identity(),1);
+    pump(host,guest,[&] { return host.status().state=="listening"; });
+    REQUIRE(host.status().boundPlayer==0);
+    previous=generation;
+    }
+  }
+
 void addresses() {
   Session host,guest,occupied;
-  host.start(hostEndpoint("0.0.0.0:0"),identity(),0);
+  host.start(invited(hostEndpoint("0.0.0.0:0")),identity(),0);
   REQUIRE(host.status().state=="listening" && host.status().address=="0.0.0.0");
-  occupied.start(hostEndpoint("0.0.0.0:"+std::to_string(host.status().port)),identity(),0);
+  occupied.start(invited(hostEndpoint("0.0.0.0:"+std::to_string(host.status().port))),identity(),0);
   REQUIRE(occupied.status().state=="failed");
   REQUIRE(occupied.status().reason.find("port occupied")!=std::string::npos);
-  guest.start(joinEndpoint("localhost:"+std::to_string(host.status().port)),identity(),0);
+  guest.start(invited(joinEndpoint("localhost:"+std::to_string(host.status().port))),identity(),0);
   REQUIRE(guest.status().state=="resolving");
   pump(host,guest,[&] { return guest.status().state=="connected"; });
   guest.start(joinEndpoint("does-not-exist.invalid:27500"),identity(),0);
@@ -786,6 +838,7 @@ int main(int argc, char** argv) {
     REQUIRE(argc==2);
     const std::string name = argv[1];
     if(name=="endpoints") endpoints();
+    else if(name=="authentication") authentication();
     else if(name=="addresses") addresses();
     else if(name=="connection") connection();
     else if(name=="rejections") rejections();

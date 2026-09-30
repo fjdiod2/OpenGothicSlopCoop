@@ -1,4 +1,4 @@
-find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto SSL)
 get_filename_component(COOP_SOURCE "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 add_custom_target(coop-build-identity
   COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${COOP_SOURCE}"
@@ -9,5 +9,5 @@ add_custom_target(coop-build-identity
 function(coop_identity target)
   add_dependencies(${target} coop-build-identity)
   target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-  target_link_libraries(${target} OpenSSL::Crypto)
+  target_link_libraries(${target} OpenSSL::Crypto OpenSSL::SSL)
 endfunction()

@@ -4,6 +4,7 @@
 #include <Tempest/TextCodec>
 #include <cstring>
 #include <cassert>
+#include <cstdlib>
 
 #if defined(__APPLE__)
 #include <filesystem>
@@ -80,6 +81,7 @@ CommandLine::CommandLine(int argc, const char** argv) {
       if(coop.role!=Coop::Role::Disabled || ++i>=argc)
         throw std::invalid_argument("Specify exactly one -coop-host [IPv4:]PORT or -coop-join ADDRESS:PORT");
       coop = arg=="-coop-host" ? Coop::hostEndpoint(argv[i]) : Coop::joinEndpoint(argv[i]);
+      if(const char* secret=std::getenv("OPENGOTHIC_JOIN_SECRET")) coop.secret=secret;
       }
     else if(arg=="-save") {
       ++i;
