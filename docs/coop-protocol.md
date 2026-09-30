@@ -967,15 +967,26 @@ guest pickup replication. N15 changes no wire or checkpoint layout (4/56).
 Pass exactly one of these explicit startup options:
 
 ```text
--coop-host PORT
--coop-join 127.0.0.1:PORT
+-coop-host [IPv4:]PORT
+-coop-join IPv4-or-hostname:PORT
 ```
 
-Host ports are `0..65535`; zero requests an OS-assigned free port. Guest ports
-are `1..65535`. The host binds only IPv4 `127.0.0.1`; the guest accepts that exact
-address, with no DNS resolution or other interfaces. Duplicate/conflicting
-options, missing values and malformed endpoints fail command-line validation.
-Without either option, no fingerprint scan or network socket is started.
+Host ports are `0..65535`; zero requests an OS-assigned free port. Bare `PORT`
+binds IPv4 loopback `127.0.0.1`, preserving test isolation. Explicit
+`0.0.0.0:27500` listens on all IPv4 interfaces; a specific local IPv4 selects that
+interface. Host bind addresses must be literals. Guest ports are `1..65535` and
+guests accept an IPv4 literal or ASCII hostname followed by `:PORT` (IPv6 is not
+yet supported). The configured address is reported separately from the port;
+listening on a private address does not discover or advertise the public NAT IP.
+
+Hostname lookup runs off the game thread, with at most four simultaneous OS calls
+and the connection deadline covering lookup plus connect/handshake. The first
+IPv4 DNS result is used. Timeout/restart discards the result without waiting for
+the OS resolver; detached work retains only its own data, never a session/game
+pointer. A saturated resolver fails clearly and can be retried. Duplicate options,
+missing values, malformed endpoints, occupied ports, unavailable interfaces,
+refused connections and DNS errors are observable failures. Without either role
+option, no fingerprint scan or socket starts.
 
 Fingerprinting uses portable OpenSSL 3 EVP SHA-256. The macOS implementation is
 tested; Windows execution is recorded separately from native Mac validation.

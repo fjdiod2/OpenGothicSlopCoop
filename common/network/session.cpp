@@ -9,6 +9,7 @@
 #include <system_error>
 
 #include "socket.h"
+#include "resolve.h"
 
 namespace Coop {
 namespace {
@@ -34,28 +35,51 @@ const char* rejection(RejectReason reason) {
   return "invalid_handshake";
   }
 
-sockaddr_in address(uint16_t port) {
+sockaddr_in address(uint16_t port, const std::string& host="127.0.0.1") {
   sockaddr_in value = {};
   value.sin_family = AF_INET;
-  value.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  if(inet_pton(AF_INET,host.c_str(),&value.sin_addr)!=1)
+    throw std::invalid_argument("Listen address must be an IPv4 literal");
   value.sin_port = htons(port);
   return value;
   }
 }
 
-Endpoint hostEndpoint(const std::string& text) { return {Role::Host,portNumber(text,true)}; }
+Endpoint hostEndpoint(const std::string& text) {
+  const auto colon=text.find(':');
+  if(colon==std::string::npos) return {Role::Host,portNumber(text,true)};
+  const auto host=text.substr(0,colon);
+  const auto port=portNumber(text.substr(colon+1),true);
+  address(port,host); // Host resolution must never silently choose an interface.
+  return {Role::Host,port,host};
+  }
 Endpoint joinEndpoint(const std::string& text) {
-  constexpr std::string_view prefix = "127.0.0.1:";
-  if(!text.starts_with(prefix))
-    throw std::invalid_argument("Co-op join requires 127.0.0.1:PORT (loopback only)");
-  return {Role::Guest,portNumber(text.substr(prefix.size()),false)};
+  const auto colon=text.find(':');
+  if(colon==std::string::npos || colon==0 || colon>253)
+    throw std::invalid_argument("Co-op join requires IPv4-or-hostname:PORT");
+  const auto host=text.substr(0,colon);
+  bool numeric=true;
+  for(char c:host) {
+    if(!((c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9') || c=='.' || c=='-'))
+      throw std::invalid_argument("Invalid co-op hostname");
+    if((c<'0' || c>'9') && c!='.') numeric=false;
+    }
+  if(host.front()=='.' || host.front()=='-' || host.back()=='-' || host.find("..")!=std::string::npos)
+    throw std::invalid_argument("Invalid co-op hostname");
+  const auto port=portNumber(text.substr(colon+1),false);
+  if(numeric) {
+    const auto ip=ntohl(address(port,host).sin_addr.s_addr);
+    if(ip==0 || ip>=0xe0000000u) throw std::invalid_argument("Invalid co-op destination IPv4");
+    }
+  return {Role::Guest,port,host};
   }
 
 struct Session::Impl {
   NetworkStatus state;
   Hello identity;
   uint64_t nextGeneration = 0;
-  uint64_t now = 0;
+  uint64_t now = 0, resolveStarted = 0;
+  std::shared_ptr<Net::Resolution> resolution;
   struct Peer {
     enum Stage { Connecting, Handshake, AcceptedSending, Connected, Closing } stage = Handshake;
     Socket socket;
@@ -76,6 +100,21 @@ struct Session::Impl {
     };
   std::unique_ptr<Socket> listener;
   std::vector<std::unique_ptr<Peer>> peers;
+
+  void connectTo(const sockaddr_in& addr,uint64_t started) {
+    auto socket=std::make_unique<Socket>(::socket(AF_INET,SOCK_STREAM,0));
+    if(socket->fd==Net::Invalid) throw Net::failure("Create co-op socket");
+    nonblocking(socket->fd);
+    const int result=::connect(socket->fd,reinterpret_cast<const sockaddr*>(&addr),sizeof(addr));
+    if(result<0 && !Net::connecting()) throw Net::failure("Connect to co-op host");
+    auto peer=std::make_unique<Peer>(socket->fd,started);
+    socket->fd=Net::Invalid;
+    peer->stage=Peer::Connecting;
+    if(!peer->output.enqueue({0,0,0,0,identity})) throw std::runtime_error("Cannot queue Hello");
+    peers.push_back(std::move(peer));
+    state.state="connecting";
+    event("connecting");
+    }
 
   void resetSnapshot() {
     state.snapshotState = "none";
@@ -547,20 +586,34 @@ void Session::start(Endpoint endpoint, const Hello& identity, uint64_t now) {
   auto& self = *impl;
   self.state.role = endpoint.role;
   self.state.port = endpoint.port;
+  self.state.address = endpoint.address;
   self.identity = identity;
   if(endpoint.role==Role::Disabled) return;
   try {
     Net::initialize();
     std::random_device random;
     self.nextGeneration = (uint64_t(random())<<32) | uint64_t(random());
-    const auto addr = address(endpoint.port);
+    if(endpoint.role==Role::Guest) {
+      sockaddr_in literal{};
+      literal.sin_family=AF_INET;
+      literal.sin_port=htons(endpoint.port);
+      if(inet_pton(AF_INET,endpoint.address.c_str(),&literal.sin_addr)==1) self.connectTo(literal,now);
+      else {
+        self.resolution=Net::resolve(endpoint.address,endpoint.port);
+        self.resolveStarted=now;
+        self.state.state="resolving";
+        self.event("resolving");
+        }
+      return;
+      }
+    const auto addr = address(endpoint.port,endpoint.address);
     const auto fd = ::socket(AF_INET,SOCK_STREAM,0);
     if(fd==Net::Invalid) throw Net::failure("Create co-op socket");
     auto socket = std::make_unique<Socket>(fd);
     nonblocking(fd);
     if(endpoint.role==Role::Host) {
       if(::bind(fd,reinterpret_cast<const sockaddr*>(&addr),sizeof(addr))<0 || ::listen(fd,int(MaxPeers))<0)
-        throw Net::failure("Listen on co-op loopback socket");
+        throw Net::failure("Listen on co-op IPv4 socket (address unavailable or port occupied)");
       sockaddr_in bound = {};
       Net::Length length = sizeof(bound);
       if(getsockname(fd,reinterpret_cast<sockaddr*>(&bound),&length)<0)
@@ -570,18 +623,7 @@ void Session::start(Endpoint endpoint, const Hello& identity, uint64_t now) {
       self.state.state = "listening";
       self.event("listening");
       }
-    else {
-      const int result = ::connect(fd,reinterpret_cast<const sockaddr*>(&addr),sizeof(addr));
-      if(result<0 && !Net::connecting())
-        throw Net::failure("Connect to co-op host");
-      auto peer = std::make_unique<Impl::Peer>(fd,now);
-      socket->fd = Net::Invalid;
-      peer->stage = Impl::Peer::Connecting;
-      if(!peer->output.enqueue({0,0,0,0,identity})) throw std::runtime_error("Cannot queue Hello");
-      self.peers.push_back(std::move(peer));
-      self.state.state = "connecting";
-      self.event("connecting");
-      }
+
     }
   catch(const std::exception& error) {
     self.listener.reset();
@@ -595,6 +637,19 @@ void Session::tick(uint64_t now) {
   auto& self = *impl;
   self.now = now;
   try {
+    if(self.resolution) {
+      if(now-self.resolveStarted>=HandshakeTimeoutMs) {
+        self.resolution.reset();
+        self.state.state="failed";
+        ++self.state.timeouts;
+        self.event("dns_timeout");
+        return;
+        }
+      if(!self.resolution->ready.load(std::memory_order_acquire)) return;
+      auto resolved=std::move(self.resolution);
+      if(!resolved->error.empty()) throw std::runtime_error(resolved->error);
+      self.connectTo(resolved->address,self.resolveStarted);
+      }
     if(self.listener) self.acceptPeers(now);
     for(size_t i=0; i<self.peers.size();) {
       auto& peer = *self.peers[i];

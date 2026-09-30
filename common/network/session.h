@@ -10,9 +10,10 @@ enum class Role { Disabled, Host, Guest };
 struct Endpoint {
   Role role = Role::Disabled;
   uint16_t port = 0;
+  std::string address = "127.0.0.1";
   };
 
-// Host accepts port 0 (OS-assigned). Guest accepts only literal 127.0.0.1:PORT.
+// Bare host PORT retains loopback defaults; explicit IPv4:PORT opts into LAN/WAN.
 Endpoint hostEndpoint(const std::string& text);
 Endpoint joinEndpoint(const std::string& text);
 
@@ -21,6 +22,7 @@ struct NetworkStatus {
   std::string state = "disabled";
   std::string reason;
   uint16_t port = 0;
+  std::string address;
   uint64_t generation = 0;
   uint64_t boundPlayer = 0, bindingRevision = 0, bindings = 0;
   uint64_t accepted = 0, rejected = 0, timeouts = 0, disconnected = 0;

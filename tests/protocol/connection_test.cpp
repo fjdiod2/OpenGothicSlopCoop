@@ -60,13 +60,44 @@ struct Socket {
   };
 
 void endpoints() {
-  REQUIRE(hostEndpoint("0").port==0);
+  REQUIRE(hostEndpoint("0").port==0 && hostEndpoint("0").address=="127.0.0.1");
+  REQUIRE(hostEndpoint("0.0.0.0:27500").address=="0.0.0.0");
+  REQUIRE(joinEndpoint("localhost:27500").address=="localhost");
+  REQUIRE(joinEndpoint("192.168.1.3:27500").port==27500);
+  throws([] { hostEndpoint("localhost:27500"); });
   REQUIRE(hostEndpoint("65535").port==65535);
   REQUIRE(joinEndpoint("127.0.0.1:4000").port==4000);
   for(auto text: {"", "-1", "+1", " 4", "1a", "65536", "4294967296"})
     throws([&] { hostEndpoint(text); });
-  for(auto text: {"localhost:4", "0.0.0.0:4", "192.168.1.1:4", "[::1]:4", "127.0.0.1:0"})
+  for(auto text: {"bad host:4", "0.0.0.0:4", "999.1.1.1:4", "[::1]:4", "127.0.0.1:0"})
     throws([&] { joinEndpoint(text); });
+  }
+
+void addresses() {
+  Session host,guest,occupied;
+  host.start(hostEndpoint("0.0.0.0:0"),identity(),0);
+  REQUIRE(host.status().state=="listening" && host.status().address=="0.0.0.0");
+  occupied.start(hostEndpoint("0.0.0.0:"+std::to_string(host.status().port)),identity(),0);
+  REQUIRE(occupied.status().state=="failed");
+  REQUIRE(occupied.status().reason.find("port occupied")!=std::string::npos);
+  guest.start(joinEndpoint("localhost:"+std::to_string(host.status().port)),identity(),0);
+  REQUIRE(guest.status().state=="resolving");
+  pump(host,guest,[&] { return guest.status().state=="connected"; });
+  guest.start(joinEndpoint("does-not-exist.invalid:27500"),identity(),0);
+  guest.tick(Session::HandshakeTimeoutMs);
+  REQUIRE(guest.status().state=="failed" && guest.status().reason=="dns_timeout");
+  // Destroying a session with an outstanding OS lookup cannot block the caller.
+  const auto started=std::chrono::steady_clock::now();
+  guest.start({},identity(),0);
+  REQUIRE(std::chrono::steady_clock::now()-started<std::chrono::milliseconds(100));
+  Session refused;
+  Socket port;
+  const auto unusedPort=port.listen();
+  Net::close(port.fd); port.fd=Net::Invalid;
+  refused.start({Role::Guest,unusedPort},identity(),0);
+  pump(host,refused,[&] { return refused.status().state=="failed"; });
+  REQUIRE(refused.status().reason.find("connect_error")!=std::string::npos ||
+          refused.status().reason.find("Connect to co-op host")!=std::string::npos);
   }
 
 void connection() {
@@ -755,6 +786,7 @@ int main(int argc, char** argv) {
     REQUIRE(argc==2);
     const std::string name = argv[1];
     if(name=="endpoints") endpoints();
+    else if(name=="addresses") addresses();
     else if(name=="connection") connection();
     else if(name=="rejections") rejections();
     else if(name=="timeout") timeout();

@@ -78,7 +78,7 @@ CommandLine::CommandLine(int argc, const char** argv) {
       }
     else if(arg=="-coop-host" || arg=="-coop-join") {
       if(coop.role!=Coop::Role::Disabled || ++i>=argc)
-        throw std::invalid_argument("Specify exactly one -coop-host PORT or -coop-join 127.0.0.1:PORT");
+        throw std::invalid_argument("Specify exactly one -coop-host [IPv4:]PORT or -coop-join ADDRESS:PORT");
       coop = arg=="-coop-host" ? Coop::hostEndpoint(argv[i]) : Coop::joinEndpoint(argv[i]);
       }
     else if(arg=="-save") {
