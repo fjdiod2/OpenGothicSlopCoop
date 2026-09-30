@@ -44,7 +44,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y glslang-tools libasound2-dev libx11-dev libxcursor-dev
+          sudo apt-get install -y glslang-tools libssl-dev libasound2-dev libx11-dev libxcursor-dev
 
       - name: Generate build version
         run: |
@@ -82,7 +82,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential devscripts debhelper cmake g++ \
-            glslang-tools libasound2-dev libx11-dev libxcursor-dev
+            glslang-tools libssl-dev libasound2-dev libx11-dev libxcursor-dev
 
       - name: Setup ./debian
         run: |
@@ -130,6 +130,7 @@ jobs:
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-glslang
+            mingw-w64-x86_64-openssl
 
       - name: Generate build version
         shell: pwsh
@@ -169,7 +170,7 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: brew install glslang
+        run: brew install glslang openssl@3
 
       - name: Generate build version
         run: |
@@ -200,7 +201,7 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: brew install glslang
+        run: brew install glslang openssl@3
 
       - name: Generate build version
         run: |

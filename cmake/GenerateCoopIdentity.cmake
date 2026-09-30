@@ -1,0 +1,31 @@
+# Source identity, independent of compiler, executable bytes and installation path.
+find_package(Git REQUIRED)
+execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${SOURCE}" rev-parse HEAD
+  OUTPUT_VARIABLE revision OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE status)
+if(NOT status EQUAL 0)
+  message(FATAL_ERROR "Co-op requires a Git checkout with a source revision")
+endif()
+execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${SOURCE}" ls-tree HEAD lib/
+  OUTPUT_VARIABLE dependencies RESULT_VARIABLE status)
+if(NOT status EQUAL 0)
+  message(FATAL_ERROR "Cannot identify co-op dependency revisions")
+endif()
+file(GLOB_RECURSE inputs RELATIVE "${SOURCE}"
+  "${SOURCE}/common/*.cpp" "${SOURCE}/common/*.h" "${SOURCE}/common/*.mm"
+  "${SOURCE}/game/*.cpp" "${SOURCE}/shader/*" "${SOURCE}/cmake/*.cmake")
+list(APPEND inputs CMakeLists.txt)
+list(SORT inputs)
+set(manifest "opengothic-coop-build-v2|host-authority|save56|${revision}|${dependencies}")
+foreach(path IN LISTS inputs)
+  file(READ "${SOURCE}/${path}" contents)
+  string(REPLACE "\r\n" "\n" contents "${contents}")
+  string(SHA256 digest "${contents}")
+  string(APPEND manifest "${path}:${digest}\n")
+endforeach()
+string(SHA256 digest "${manifest}")
+set(header "#pragma once\n#define COOP_BUILD_ID \"opengothic-coop-build-v2:${revision}:${digest}\"\n")
+get_filename_component(directory "${OUTPUT}" DIRECTORY)
+file(MAKE_DIRECTORY "${directory}")
+file(WRITE "${OUTPUT}.tmp" "${header}")
+execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${OUTPUT}.tmp" "${OUTPUT}")
+file(REMOVE "${OUTPUT}.tmp")

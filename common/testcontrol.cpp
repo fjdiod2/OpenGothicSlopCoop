@@ -195,6 +195,7 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
   out.Key("rejected"); out.Uint64(net.rejected);
   out.Key("timeouts"); out.Uint64(net.timeouts);
   out.Key("disconnected"); out.Uint64(net.disconnected);
+  out.Key("build_identity"); str(Coop::buildIdentity());
   out.Key("engine_fingerprint"); str(Coop::hexFingerprint(networkIdentity.engine));
   out.Key("data_fingerprint"); str(Coop::hexFingerprint(networkIdentity.gameData));
   out.EndObject();

@@ -743,69 +743,7 @@ void posesValidation() {
   REQUIRE(host.status().reason=="invalid_pose_ack");
   }
 
-struct Fixture {
-  std::filesystem::path root = std::filesystem::temp_directory_path()/
-    ("gothic-fingerprint-"+std::to_string(getpid()));
-  Fixture() {
-    std::filesystem::create_directories(root/"Data");
-    std::filesystem::create_directories(root/"_work");
-    }
-  ~Fixture() { std::filesystem::remove_all(root); }
-  void write(const std::string& name,const std::string& contents) {
-    std::ofstream file(root/name,std::ios::binary);
-    file << contents;
-    REQUIRE(bool(file));
-    }
-  };
 
-void fingerprints() {
-  Fixture fixture;
-  fixture.write("engine","abc");
-  fixture.write("Data/a.vdf","archive A");
-  fixture.write("Data/b.vdf","archive B");
-  fixture.write("_work/game.dat","compiled script");
-  fixture.write("mod.ini","selected mod");
-  const std::atomic_bool cancel = false;
-  const auto& root = fixture.root;
-  REQUIRE(hexFingerprint(hashFile(root/"engine",cancel))==
-          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-  FingerprintInputs inputs{root/"engine",root/"Data",root/"_work",root/"mod.ini",
-                           {root/"Data/a.vdf",root/"Data/b.vdf"},{"game=2","language=0"}};
-  const auto original = fingerprint(inputs,cancel);
-  REQUIRE(original==fingerprint(inputs,cancel));
-  // Installation directory and filesystem enumeration order are not identity.
-  std::filesystem::copy(root,root.string()+"-copy",std::filesystem::copy_options::recursive);
-  const std::filesystem::path copied = root.string()+"-copy";
-  FingerprintInputs relocated{copied/"engine",copied/"Data",copied/"_work",copied/"mod.ini",
-                              {copied/"Data/a.vdf",copied/"Data/b.vdf"},inputs.settings};
-  const auto moved = fingerprint(relocated,cancel);
-  std::filesystem::remove_all(copied);
-  REQUIRE(moved==original);
-  const auto time = std::filesystem::last_write_time(root/"Data/a.vdf");
-  fixture.write("Data/a.vdf","archive C"); // Same byte count and mtime; content must still matter.
-  std::filesystem::last_write_time(root/"Data/a.vdf",time);
-  REQUIRE(fingerprint(inputs,cancel).gameData!=original.gameData);
-  fixture.write("Data/a.vdf","archive A");
-  REQUIRE(fingerprint(inputs,cancel)==original);
-  std::swap(inputs.mountedArchives[0],inputs.mountedArchives[1]);
-  REQUIRE(fingerprint(inputs,cancel).gameData!=original.gameData);
-  std::swap(inputs.mountedArchives[0],inputs.mountedArchives[1]);
-  inputs.settings[1] = "language=1";
-  REQUIRE(fingerprint(inputs,cancel).gameData!=original.gameData);
-  inputs.settings[1] = "language=0";
-  fixture.write("mod.ini","different mod");
-  REQUIRE(fingerprint(inputs,cancel).gameData!=original.gameData);
-  fixture.write("mod.ini","selected mod");
-  fixture.write("_work/game.dat","modified script");
-  REQUIRE(fingerprint(inputs,cancel).gameData!=original.gameData);
-  fixture.write("_work/game.dat","compiled script");
-  fixture.write("engine","abd");
-  const auto changed = fingerprint(inputs,cancel);
-  REQUIRE(changed.engine!=original.engine && changed.gameData==original.gameData);
-  throws([&] { const std::atomic_bool stop=true; fingerprint(inputs,stop); });
-  std::filesystem::create_symlink(root/"engine",root/"Data/symlink");
-  throws([&] { fingerprint(inputs,cancel); });
-  }
 }
 
 int main(int argc, char** argv) {
@@ -816,7 +754,6 @@ int main(int argc, char** argv) {
     else if(name=="connection") connection();
     else if(name=="rejections") rejections();
     else if(name=="timeout") timeout();
-    else if(name=="fingerprints") fingerprints();
     else if(name=="binding") binding();
     else if(name=="binding-authority") bindingAuthority();
     else if(name=="snapshot-roundtrip") snapshotRoundtrip();

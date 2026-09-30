@@ -23,7 +23,6 @@ void MainWindow::initNetwork() {
   networkPreparation = "fingerprinting";
   try {
     Coop::FingerprintInputs inputs;
-    inputs.executable = Coop::executablePath();
     inputs.data = CommandLine::inst().nestedPath({u"Data"},Tempest::Dir::FT_Dir);
     inputs.work = CommandLine::inst().nestedPath({u"_work"},Tempest::Dir::FT_Dir);
     inputs.mod = CommandLine::inst().modPath();
@@ -32,7 +31,7 @@ void MainWindow::initNetwork() {
     inputs.settings = {"game="+std::to_string(game.version().game),
                        "patch="+std::to_string(game.version().patch),
                        "language="+std::to_string(game.settingsGetI("GAME","language")),
-                       "mod="+inputs.mod.filename().generic_string()};
+                       "mod="+Coop::manifestPath(inputs.mod.filename())};
     fingerprintJob = std::async(std::launch::async,[this,inputs] {
       return Coop::fingerprint(inputs,cancelFingerprint);
       });

@@ -46,7 +46,7 @@ at the end of `Poses`. Both layouts change; version-4 peers are rejected.
 Version 4 added character poses/animation layers and pose acknowledgements.
 Version 3 added snapshot begin/chunk/end/readiness messages. Older versions are
 rejected explicitly. Version 2 introduced `Accepted`, separating compatibility
-from companion assignment. Other message layouts are unchanged apart from the required version field. The exact executable fingerprint also prevents
+from companion assignment. Other message layouts are unchanged apart from the required version field. The source-build fingerprint also prevents
 mixing different engine implementations.
 
 N06 adds a persistent, typed world-object registry and checkpoint format, without
@@ -977,10 +977,9 @@ address, with no DNS resolution or other interfaces. Duplicate/conflicting
 options, missing values and malformed endpoints fail command-line validation.
 Without either option, no fingerprint scan or network socket is started.
 
-The macOS implementation is tested. Fingerprinting currently uses CommonCrypto
-and macOS executable discovery; other platforms report unsupported preparation
-instead of accepting an unchecked peer. Porting fingerprint support is separate
-work. POSIX transport code is isolated from the engine/renderer.
+Fingerprinting uses portable OpenSSL 3 EVP SHA-256. The macOS implementation is
+tested; Windows execution is recorded separately from native Mac validation.
+Transport code is isolated from the engine/renderer.
 
 Fingerprinting runs once in a cancellable background job. Sockets start after it
 succeeds; preparation failure leaves the game running and reports the error.
@@ -1021,16 +1020,23 @@ N12 adds `can_rejoin`, which matches availability of the ordinary R-key action.
 
 ## Exact compatibility fingerprint inputs
 
-The engine fingerprint is SHA-256 of the running executable's file bytes,
-located through the platform executable API rather than a caller-supplied
-version string. This deliberately requires identical binaries, including dirty
-builds, architecture and build mode; cross-build compatibility is not negotiated.
+The engine fingerprint is SHA-256 of the generated `opengothic-coop-build-v2`
+identity: source Git revision, dependency gitlinks, a normalized source-content
+hash, and the versioned host-authority/checkpoint configuration contract. CMake
+refreshes it on every build without recompiling when unchanged. CRLF versus LF,
+installation paths, compiler, architecture and optimization mode are excluded.
+Gameplay source edits change it, including uncommitted edits. Generated `game/build.h`
+and the optional local Tempest background-window override are excluded. Use the
+same revision and stock dependency revisions for remote play. Arbitrary compiler
+macros, modified dependencies and custom gameplay configurations are unsupported;
+this ID is compatibility detection, not software attestation. Local test state
+reports both `build_identity` and its `engine_fingerprint` digest.
 
 The game-data fingerprint is SHA-256 of a canonical manifest. Every integer in
 the manifest is unsigned 64-bit big-endian; every text field is its byte length
 followed by its UTF-8 bytes. Digests are 32 raw bytes. Append in this order:
 
-1. Text `OpenGothic-data-manifest-v1`.
+1. Text `OpenGothic-data-manifest-v2`.
 2. Settings count, then these text fields in order: `game=N` (detected game),
    `patch=N` (detected patch), `language=N` (`[GAME] language`), and
    `mod=FILENAME` (selected mod INI basename, empty if none).
@@ -1038,9 +1044,10 @@ followed by its UTF-8 bytes. Digests are 32 raw bytes. Append in this order:
    installation's Data directory, in the actual engine mount order. This records
    override order and failed/omitted mounts as well as configuration.
 4. File-entry count, then each entry's logical name and content SHA-256. Entries
-   are sorted by logical name. Names are `Data/RELATIVE_PATH`, `_work/RELATIVE_PATH`
-   and, when selected, `selected-mod` for the mod INI. Paths use `/`, with original
-   case preserved. Absolute installation paths are excluded.
+   are sorted by logical name. Names are `data/RELATIVE_PATH`, `_work/RELATIVE_PATH`
+   and, when selected, `selected-mod` for the mod INI. Paths use `/` and ASCII lowercase (including the mod basename).
+   Ambiguous case-folded duplicate names are refused. Non-ASCII UTF-8 is preserved
+   exactly; Unicode case/normalization equivalence is not supported. Absolute installation paths are excluded.
 
 All regular files under Data and _work are included, including unused archives
 and resources; this is a conservative compatibility check. `.DS_Store` is
@@ -1050,9 +1057,12 @@ tree entries or manifest text over 4,096 bytes fail preparation. There is no
 mtime-only cache: equal-size modifications with preserved mtime still change the
 digest. File size and mtime are also checked around each read to reject observed
 concurrent modification. Runtime saves/logs and display/control settings are
-outside the manifest. Same content in a different installation directory agrees.
+outside the manifest. Equal-priority archives have a deterministic relative-path
+tie-breaker instead of directory enumeration order. Language, mod INI bytes and
+actual mount order remain strict: use the same edition, patch and language.
+Same content in a different installation directory agrees.
 
-The installation, selected settings and executable must stay unchanged while a
+The installation, selected settings and source build must stay unchanged while a
 network session runs; the fingerprint is a startup snapshot, not a file watcher
 or a filesystem transaction. Changing assets/configuration requires restarting
 the peers. The hashes compare compatibility and do not authenticate a player.
@@ -1425,3 +1435,10 @@ gameplay pose only; reload/rejoin do not restore an emote from disk.
 
 The picker supports clicks, arrows and Enter, digits 1–9 and 0 for its first ten
 entries, and V/Escape/right click to close. It does not pause the world.
+
+R02 build dependency: install OpenSSL 3 development libraries (`brew install
+openssl@3` on macOS; vcpkg `openssl:x64-windows` or MSYS2's mingw OpenSSL package
+on Windows). CMake uses `OpenSSL::Crypto`. The portable SHA implementation uses
+[OpenSSL EVP](https://docs.openssl.org/3.5/man3/EVP_DigestInit/).
+The asset-free portability workflow runs SHA vectors, manifest fixtures and codec
+checks without Gothic assets. A configured workflow is not a Windows test result.

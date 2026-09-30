@@ -3,25 +3,27 @@
 #include <algorithm>
 #include <fstream>
 #include <stdexcept>
+#include <memory>
+#include <openssl/evp.h>
+#include "coop_build.h"
 
-#ifdef __APPLE__
-#include <CommonCrypto/CommonDigest.h>
-#include <mach-o/dyld.h>
-#endif
 
 namespace Coop {
 namespace {
-#ifdef __APPLE__
 void cancelled(const std::atomic_bool& cancel) {
   if(cancel.load()) throw std::runtime_error("Fingerprint cancelled");
   }
 
 struct Hash {
-  CC_SHA256_CTX state;
-  Hash() { CC_SHA256_Init(&state); }
+  std::unique_ptr<EVP_MD_CTX,decltype(&EVP_MD_CTX_free)> state{EVP_MD_CTX_new(),EVP_MD_CTX_free};
+  Hash() {
+    if(!state || EVP_DigestInit_ex(state.get(),EVP_sha256(),nullptr)!=1)
+      throw std::runtime_error("Cannot initialize SHA-256");
+    }
   void bytes(std::span<const uint8_t> data) {
     // Callers supply at most a 1 MiB file block or a bounded manifest field.
-    CC_SHA256_Update(&state,data.data(),CC_LONG(data.size()));
+    if(EVP_DigestUpdate(state.get(),data.data(),data.size())!=1)
+      throw std::runtime_error("SHA-256 update failed");
     }
   void number(uint64_t value) {
     std::array<uint8_t,8> encoded;
@@ -35,7 +37,9 @@ struct Hash {
     }
   Fingerprint finish() {
     Fingerprint result;
-    CC_SHA256_Final(result.data(),&state);
+    unsigned size = 0;
+    if(EVP_DigestFinal_ex(state.get(),result.data(),&size)!=1 || size!=result.size())
+      throw std::runtime_error("SHA-256 finalization failed");
     return result;
     }
   };
@@ -53,14 +57,12 @@ void appendTree(std::vector<Entry>& entries, const std::filesystem::path& root, 
     if(entry.is_directory()) continue;
     if(!entry.is_regular_file()) throw std::runtime_error("Non-regular fingerprint input");
     if(entries.size()>=100000) throw std::runtime_error("Too many fingerprint inputs");
-    entries.push_back({prefix+entry.path().lexically_relative(root).generic_string(),entry.path()});
+    entries.push_back({prefix+manifestPath(entry.path().lexically_relative(root)),entry.path()});
     }
   }
-#endif
 }
 
 Fingerprint hashBytes(std::span<const uint8_t> bytes) {
-#ifdef __APPLE__
   Hash hash;
   while(!bytes.empty()) {
     const auto chunk = bytes.first(std::min(bytes.size(),size_t(1024*1024)));
@@ -68,14 +70,9 @@ Fingerprint hashBytes(std::span<const uint8_t> bytes) {
     bytes = bytes.subspan(chunk.size());
     }
   return hash.finish();
-#else
-  (void)bytes;
-  throw std::runtime_error("Co-op fingerprints currently require macOS CommonCrypto");
-#endif
   }
 
 Fingerprint hashFile(const std::filesystem::path& file, const std::atomic_bool& cancel) {
-#ifdef __APPLE__
   namespace fs = std::filesystem;
   cancelled(cancel);
   if(!fs::is_regular_file(file) || fs::is_symlink(file))
@@ -97,28 +94,28 @@ Fingerprint hashFile(const std::filesystem::path& file, const std::atomic_bool& 
   if(!input.eof() || count!=size || fs::file_size(file)!=size || fs::last_write_time(file)!=time)
     throw std::runtime_error("Fingerprint input unreadable or changed: "+file.string());
   return hash.finish();
-#else
-  (void)file; (void)cancel;
-  throw std::runtime_error("Co-op fingerprints currently require macOS CommonCrypto");
-#endif
   }
 
 Hello fingerprint(const FingerprintInputs& inputs, const std::atomic_bool& cancel) {
-#ifdef __APPLE__
   Hello result;
-  result.engine = hashFile(inputs.executable,cancel);
+  cancelled(cancel);
+  const auto build = buildIdentity();
+  result.engine = hashBytes({reinterpret_cast<const uint8_t*>(build.data()),build.size()});
   std::vector<Entry> entries;
-  appendTree(entries,inputs.data,"Data/",cancel);
+  appendTree(entries,inputs.data,"data/",cancel);
   appendTree(entries,inputs.work,"_work/",cancel);
   if(!inputs.mod.empty()) entries.push_back({"selected-mod",inputs.mod});
   std::sort(entries.begin(),entries.end(),[](const auto& a,const auto& b) { return a.name<b.name; });
+  for(size_t i=1; i<entries.size(); ++i)
+    if(entries[i-1].name==entries[i].name)
+      throw std::runtime_error("Ambiguous case-folded game-data path: "+entries[i].name);
   Hash hash;
-  hash.text("OpenGothic-data-manifest-v1");
+  hash.text("OpenGothic-data-manifest-v2");
   hash.number(inputs.settings.size());
   for(auto& setting:inputs.settings) hash.text(setting);
   hash.number(inputs.mountedArchives.size());
   for(auto& archive:inputs.mountedArchives)
-    hash.text(archive.lexically_relative(inputs.data).generic_string());
+    hash.text(manifestPath(archive.lexically_relative(inputs.data)));
   hash.number(entries.size());
   for(auto& entry:entries) {
     hash.text(entry.name);
@@ -127,10 +124,6 @@ Hello fingerprint(const FingerprintInputs& inputs, const std::atomic_bool& cance
     }
   result.gameData = hash.finish();
   return result;
-#else
-  (void)inputs; (void)cancel;
-  throw std::runtime_error("Co-op fingerprints currently require macOS CommonCrypto");
-#endif
   }
 
 std::string hexFingerprint(const Fingerprint& value) {
@@ -141,16 +134,16 @@ std::string hexFingerprint(const Fingerprint& value) {
   return result;
   }
 
-std::filesystem::path executablePath() {
-#ifdef __APPLE__
-  uint32_t size = 0;
-  _NSGetExecutablePath(nullptr,&size);
-  std::vector<char> path(size);
-  if(_NSGetExecutablePath(path.data(),&size)!=0) throw std::runtime_error("Cannot locate engine executable");
-  return std::filesystem::canonical(path.data());
-#else
-  throw std::runtime_error("Co-op executable fingerprint currently requires macOS");
-#endif
+std::string buildIdentity() { return COOP_BUILD_ID; }
+
+std::string manifestPath(const std::filesystem::path& path) {
+  const auto utf8 = path.generic_u8string();
+  std::string result(utf8.begin(),utf8.end());
+  for(auto& c:result) {
+    if(c=='\\') c='/';
+    if(c>='A' && c<='Z') c=char(c-'A'+'a');
+    }
+  return result;
   }
 
 }

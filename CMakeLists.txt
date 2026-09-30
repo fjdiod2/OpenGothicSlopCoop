@@ -14,6 +14,8 @@ set(CMAKE_SKIP_RPATH ON)
 add_library(${PROJECT_NAME} STATIC)
 add_executable(Gothic2Notr)
 add_executable(Spacer)
+include(cmake/CoopIdentity.cmake)
+coop_identity(OpenGothic)
 
 if(MSVC)
   add_definitions(-D_USE_MATH_DEFINES)
