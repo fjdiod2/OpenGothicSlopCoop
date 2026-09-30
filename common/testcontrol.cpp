@@ -30,11 +30,19 @@ namespace {
 struct TestEventDispatch : Tempest::SystemApi {
   using SystemApi::dispatchMouseDown;
   using SystemApi::dispatchMouseUp;
+  using SystemApi::dispatchKeyDown;
+  using SystemApi::dispatchKeyUp;
   };
 }
 
 using namespace Tempest;
 namespace fs = std::filesystem;
+
+void MainWindow::dispatchTestKey(uint64_t id, Tempest::KeyEvent& event, bool down) {
+  if(!testHeldNative) { dispatchPlayerKey(id,event,down); return; }
+  if(down) TestEventDispatch::dispatchKeyDown(*this,event,uint32_t(event.key));
+  else TestEventDispatch::dispatchKeyUp(*this,event,uint32_t(event.key));
+  }
 
 void MainWindow::initTestControl() {
   testControlDir = CommandLine::inst().testControlPath();
@@ -288,8 +296,10 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       out.StartArray(); out.Double(v.x); out.Double(v.y); out.Double(v.z); out.EndArray();
       };
     auto combatInfo = [&](const Npc& actor) {
+      out.Key("can_sneak"); out.Bool(actor.canSneak());
+      out.Key("sneaking"); out.Bool((actor.walkMode() & WalkBit::WM_Sneak)==WalkBit::WM_Sneak);
+      out.Key("in_air"); out.Bool(actor.isInAir());
       if(!testWatchedGlobals.empty()) {
-        out.Key("in_air"); out.Bool(actor.isInAir());
         out.Key("ai_busy"); out.Bool(actor.isAiBusy());
         out.Key("assess_talk"); out.Bool(actor.hasPerc(PERC_ASSESSTALK));
         }
@@ -529,7 +539,7 @@ void MainWindow::pollTestControl() {
       if(now>=testReleaseAt) {
         for(auto it=testHeldKeys.rbegin(); it!=testHeldKeys.rend(); ++it) {
           KeyEvent up(*it, Event::M_NoModifier, Event::KeyUp);
-          dispatchPlayerKey(testHeldPlayer, up, false);
+          dispatchTestKey(testHeldPlayer, up, false);
           }
         testHeldKeys.clear();
         if(!testAsyncInput) {
@@ -597,7 +607,7 @@ void MainWindow::pollTestControl() {
     if(action=="release_keys") {
       for(auto key:testHeldKeys) {
         KeyEvent up(key, Event::M_NoModifier, Event::KeyUp);
-        dispatchPlayerKey(testHeldPlayer,up,false);
+        dispatchTestKey(testHeldPlayer,up,false);
         }
       testHeldKeys.clear();
       testAsyncInput = false;
@@ -638,12 +648,17 @@ void MainWindow::pollTestControl() {
           throw std::runtime_error("Unsupported or duplicate test key");
         testHeldKeys.push_back(found);
         }
+      if(cmd.HasMember("native") && !cmd["native"].IsBool())
+        throw std::runtime_error("Expected native boolean");
+      testHeldNative=cmd.HasMember("native") && cmd["native"].GetBool();
+      if(testHeldNative && testInputPlayer!=game.localPlayerId())
+        throw std::runtime_error("Native keys require the local player");
       testReleaseAt = now+cmd["ms"].GetUint();
       testHeldPlayer = testInputPlayer;
       testAsyncInput = action=="hold_keys";
       for(auto key:testHeldKeys) {
         KeyEvent down(key);
-        dispatchPlayerKey(testInputPlayer, down, true);
+        dispatchTestKey(testInputPlayer, down, true);
         }
       if(testAsyncInput) replyTestControl(testRequestId);
       return; // Reply after releasing the key; rendering/simulation keep running.

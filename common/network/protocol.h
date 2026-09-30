@@ -16,7 +16,7 @@ namespace Coop {
 using Bytes = std::vector<uint8_t>;
 using Fingerprint = std::array<uint8_t,32>;
 
-inline constexpr uint16_t ProtocolVersion = 12;
+inline constexpr uint16_t ProtocolVersion = 13;
 inline constexpr size_t HeaderBytes        = 44;
 inline constexpr size_t MaxFrameBytes      = 64*1024;
 inline constexpr size_t MaxQueueBytes      = 256*1024;
@@ -48,9 +48,9 @@ enum class RejectReason : uint16_t {
 enum Button : uint32_t {
   Forward = 1u<<0, Backward = 1u<<1, TurnLeft = 1u<<2, TurnRight = 1u<<3,
   StrafeLeft = 1u<<4, StrafeRight = 1u<<5, Jump = 1u<<6, Walk = 1u<<7,
-  Attack = 1u<<8, Melee = 1u<<9
+  Attack = 1u<<8, Melee = 1u<<9, Sneak = 1u<<10
   };
-inline constexpr uint32_t KnownButtons = 0x3ff;
+inline constexpr uint32_t KnownButtons = 0x7ff;
 inline constexpr int16_t MaxLookDelta = 1000;
 
 struct Hello {

@@ -174,6 +174,8 @@ class MainWindow : public Tempest::Window {
     uint64_t testInputPlayer = 1;
     uint64_t testHeldPlayer = 1;
     bool testAsyncInput = false;
+    bool testHeldNative = false;
+    void dispatchTestKey(uint64_t id, Tempest::KeyEvent& event, bool down);
     PlayerControl& controlForPlayer(uint64_t id);
     void dispatchPlayerKey(uint64_t id, Tempest::KeyEvent& event, bool down);
     uint64_t testReleaseAt = 0;

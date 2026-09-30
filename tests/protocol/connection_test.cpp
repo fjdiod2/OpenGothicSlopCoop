@@ -519,7 +519,7 @@ void inputValidation() {
     };
   Socket peer;
   const auto gen = ready(peer);
-  sendMessage(peer,{gen,2,1,0,Input{0,25,0}});
+  sendMessage(peer,{gen,2,1,0,Input{Jump,25,0}});
   pump(host,idle,[&] { return host.status().inputReceived==1; });
   REQUIRE(host.takeInput());
   REQUIRE(host.inputApplied(gen,1,1));
@@ -527,7 +527,7 @@ void inputValidation() {
   sendMessage(peer,{gen+1,2,2,0,Input{Forward,1000,0}});
   pump(host,idle,[&] { return host.status().inputDuplicates==1 && host.status().inputStale==1; });
   REQUIRE(!host.takeInput() && host.status().inputApplied==1);
-  sendMessage(peer,{gen,2,2,0,Input{0,0,0}});
+  sendMessage(peer,{gen,2,2,0,Input{Sneak,0,0}});
   pump(host,idle,[&] { return host.status().inputReceived==2; });
   REQUIRE(host.takeInput());
   REQUIRE(host.inputApplied(gen,2,1));
@@ -538,7 +538,7 @@ void inputValidation() {
     Socket invalid;
     const auto generation = ready(invalid);
     if(fault==0) sendMessage(invalid,{generation,1,1,0,Input{Forward,0,0}});
-    if(fault==1) sendMessage(invalid,{generation,2,1,0,Input{Jump,0,0}});
+    if(fault==1) sendMessage(invalid,{generation,2,1,0,Input{Walk,0,0}});
     if(fault==2)
       for(uint64_t i=1; i<=65; ++i) sendMessage(invalid,{generation,2,i,0,Input{Forward,0,0}});
     pump(host,idle,[&] { return host.status().state=="listening"; });

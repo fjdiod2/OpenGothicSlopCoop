@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 12 (P02)
+# Co-op wire protocol, version 13 (guest jump/sneak)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -14,6 +14,10 @@ connect on macOS loopback. N05 binds the host's saved companion to that connecti
 N07 makes the guest a presentation-only process; N08 transfers a host checkpoint,
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
+
+Version 13 enables guest jump (bit 6) and adds sneak toggle (bit 10), routed
+through the original authoritative player controller. Version-12 peers are
+rejected; Input remains 110 bytes and checkpoints remain version 56.
 
 Version 12 adds buy/sell/close-trade intents in the existing 110-byte Input, a
 trade-open story flag and the companion inventory in story projections. Version-11
@@ -69,7 +73,7 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `12` |
+| 8 | 2 | Version | Exactly `13` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
@@ -231,14 +235,17 @@ EOF and cancellation while the application owns a completed snapshot.
 | 7 | `0x80` | Walk modifier |
 | 8 | `0x100` | Melee action held (normal Ctrl/action mapping) |
 | 9 | `0x200` | Draw/sheath melee on rising edge (Space or melee key) |
+| 10 | `0x400` | Toggle sneak on rising edge; requires the actor's learned sneak skill |
 
 All other bits must be zero. Both look deltas must be in `[-1000, 1000]`.
 The button mask replaces the previously held state; zero releases every button.
 Look deltas are applied once per accepted sequence. This is input intent, not
 position, elapsed simulation time, damage or a script command. The host determines
 simulation timing and gameplay effects. N09 enables bits 0–5 through the guest's
-normal key mappings (including alternate keys). Jump/Walk remain reserved and
-are rejected by the session as `unsupported_input`. G01 permits item pickup;
+normal key mappings (including alternate keys). Version 13 enables Jump and
+Sneak; the host preserves normal collision, jump animation and learned-skill
+checks. Sneak toggles only on a new press, never on release or continued hold.
+Walk remains reserved and is rejected by the session as `unsupported_input`. G01 permits item pickup;
 G03 permits melee/ranged weapon equipment. G06 enables bits 8–9 through the
 original controller, including action+forward attacks and directional melee
 controls. Action without a drawn melee weapon retains the G01 pickup behavior;
@@ -1090,7 +1097,7 @@ This 110-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 0000006e 000c 0003
+4f474350 0000006e 000d 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064

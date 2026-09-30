@@ -229,7 +229,8 @@ constexpr std::pair<KeyCodec::Action,uint32_t> networkActions[] = {
   {KeyCodec::ActionGeneric,Coop::Attack}, {KeyCodec::WeaponMele,Coop::Melee},
   {KeyCodec::Forward,Coop::Forward}, {KeyCodec::Back,Coop::Backward},
   {KeyCodec::RotateL,Coop::TurnLeft}, {KeyCodec::RotateR,Coop::TurnRight},
-  {KeyCodec::Left,Coop::StrafeLeft}, {KeyCodec::Right,Coop::StrafeRight}
+  {KeyCodec::Left,Coop::StrafeLeft}, {KeyCodec::Right,Coop::StrafeRight},
+  {KeyCodec::Jump,Coop::Jump}, {KeyCodec::Sneak,Coop::Sneak}
   };
 }
 
