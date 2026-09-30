@@ -11,6 +11,7 @@
 #include "utils/testwindow.h"
 
 #include <Tempest/Application>
+#include <Tempest/SystemApi>
 #include <Tempest/Log>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
@@ -22,6 +23,15 @@
 #include <random>
 #include <chrono>
 #include <cmath>
+
+// Expose the same dispatcher used by native window events, including overlays
+// and mouse capture, without moving the OS pointer or activating the window.
+namespace {
+struct TestEventDispatch : Tempest::SystemApi {
+  using SystemApi::dispatchMouseDown;
+  using SystemApi::dispatchMouseUp;
+  };
+}
 
 using namespace Tempest;
 namespace fs = std::filesystem;
@@ -652,7 +662,8 @@ void MainWindow::pollTestControl() {
       if(button==Event::ButtonNone) throw std::runtime_error("Unsupported mouse button");
       const bool down=cmd["down"].GetBool();
       MouseEvent event(w()/2,h()/2,button,Event::M_NoModifier,0,0,down ? Event::MouseDown : Event::MouseUp);
-      if(down) mouseDownEvent(event); else mouseUpEvent(event);
+      if(down) TestEventDispatch::dispatchMouseDown(*this,event);
+      else TestEventDispatch::dispatchMouseUp(*this,event);
       }
     else if(action=="mouse") {
       if(testInputPlayer!=game.localPlayerId() || !cmd.HasMember("dx") || !cmd.HasMember("dy") ||

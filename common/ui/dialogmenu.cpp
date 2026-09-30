@@ -585,15 +585,15 @@ void DialogMenu::onSelect() {
 
 void DialogMenu::mouseDownEvent(MouseEvent &event) {
   if(trade.isOpen()==InventoryMenu::State::Trade) { trade.mouseDownEvent(event); return; }
+  if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
+    event.ignore();
+    return;
+    }
   if(!localOwner()) { event.accept(); return; }
   if(replica) {
     if(event.button==MouseEvent::ButtonLeft && dlgSel<choice.size()) sendRemote(2,uint64_t(choice[dlgSel].scriptFn)+1);
     if(event.button==MouseEvent::ButtonRight) sendRemote(3);
     event.accept(); return;
-    }
-  if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
-    event.ignore();
-    return;
     }
 
   if(event.button==MouseEvent::ButtonLeft) {
@@ -606,12 +606,12 @@ void DialogMenu::mouseDownEvent(MouseEvent &event) {
 
 void DialogMenu::mouseWheelEvent(MouseEvent &e) {
   if(trade.isOpen()==InventoryMenu::State::Trade) { trade.mouseWheelEvent(e); return; }
-  if(!localOwner()) { e.accept(); return; }
-  if(replica) { sendRemote(e.delta>0 ? 4 : 5); e.accept(); return; }
   if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
     e.ignore();
     return;
     }
+  if(!localOwner()) { e.accept(); return; }
+  if(replica) { sendRemote(e.delta>0 ? 4 : 5); e.accept(); return; }
 
   if(e.delta>0)
     dlgSel--;
@@ -623,6 +623,10 @@ void DialogMenu::mouseWheelEvent(MouseEvent &e) {
 
 void DialogMenu::keyDownEvent(KeyEvent &e) {
   if(trade.isOpen()==InventoryMenu::State::Trade) { trade.keyDownEvent(e); return; }
+  if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
+    e.ignore();
+    return;
+    }
   if(!localOwner()) { e.accept(); return; }
   if(replica) {
     if(e.key==Event::K_Return && dlgSel<choice.size()) sendRemote(2,uint64_t(choice[dlgSel].scriptFn)+1);
@@ -630,10 +634,6 @@ void DialogMenu::keyDownEvent(KeyEvent &e) {
     if(e.key==Event::K_Up || e.key==Event::K_W) sendRemote(4);
     if(e.key==Event::K_Down || e.key==Event::K_S) sendRemote(5);
     e.accept(); return;
-    }
-  if(state==State::Idle || trade.isOpen()!=InventoryMenu::State::Closed){
-    e.ignore();
-    return;
     }
 
   if(e.key==Event::K_Return){
