@@ -142,6 +142,7 @@ MainWindow::~MainWindow() {
   takeWidget(&document);
   takeWidget(&video);
   takeWidget(&rootMenu);
+  takeWidget(&emotes);
 #if defined(__MOBILE_PLATFORM__)
   takeWidget(&mobileUi);
 #endif
@@ -155,6 +156,7 @@ float MainWindow::uiScale() const {
   }
 
 void MainWindow::setupUi() {
+  emotes.selected=[this](uint8_t id) { selectEmote(id); };
   inventory.onEquipmentRequest = [this](size_t instance, bool equipped) { sendNetworkEquipment(instance,equipped); };
   inventory.onConsumableRequest = [this](size_t instance) { sendNetworkConsumable(instance); };
   setLayout(new StackLayout());
@@ -164,6 +166,7 @@ void MainWindow::setupUi() {
   addWidget(&chapter);
   addWidget(&video);
   addWidget(&rootMenu);
+  addWidget(&emotes);
 #if defined(__MOBILE_PLATFORM__)
   addWidget(&mobileUi);
 #endif
@@ -389,7 +392,7 @@ void MainWindow::mouseMoveEvent(MouseEvent &event) {
 
 void MainWindow::processMouse(MouseEvent& event, bool enable) {
   auto center = Point(w()/2,h()/2);
-  if(enable && event.pos()!=center && hasFocus()) {
+  if(!emotes.isActive() && enable && event.pos()!=center && hasFocus()) {
     dMouse += (event.pos()-center);
     setCursorPosition(center);
     }
@@ -397,7 +400,7 @@ void MainWindow::processMouse(MouseEvent& event, bool enable) {
 
 void MainWindow::tickMouse(uint64_t dt) {
   auto camera = Gothic::inst().camera();
-  if(dialogs.hasContent() || Gothic::inst().isPause() || camera==nullptr || camera->isCutscene()) {
+  if(emotes.isActive() || dialogs.hasContent() || Gothic::inst().isPause() || camera==nullptr || camera->isCutscene()) {
     dMouse = Point();
     return;
     }
@@ -455,7 +458,31 @@ void MainWindow::mouseWheelEvent(MouseEvent &event) {
     camera->changeZoom(event.delta);
   }
 
+bool MainWindow::canOpenEmotes() const {
+  auto& game=Gothic::inst();
+  return game.checkLoading()==Gothic::LoadState::Idle && game.localPlayer() && !game.isCoopFailed() &&
+    !game.isNetworkPaused() && !rootMenu.isActive() && !inventory.isActive() && !dialogs.isActive() &&
+    !chapter.isActive() && !document.isActive() && !video.isActive() && game.world()->currentCs()==nullptr &&
+    (!game.isGuest() || network.status().snapshotState=="ready");
+  }
+
+void MainWindow::selectEmote(uint8_t id) {
+  auto& game=Gothic::inst();
+  if(!canOpenEmotes()) return;
+  if(game.isGuest()) {
+    Coop::Input input; input.emote=id;
+    if(!network.sendInput(input)) network.invalidate("input_queue_full");
+    }
+  else game.localPlayer()->requestEmote(id);
+  }
+
 void MainWindow::keyDownEvent(KeyEvent &event) {
+  if(emotes.isActive()) { emotes.keyDownEvent(event); uiKeyUp=&emotes; return; }
+  if(event.key==Event::K_V && canOpenEmotes()) {
+    player.clearInput(); networkKeys.clear(); networkButtons=0; sendNetworkInput();
+    std::memset(mouseP,0,sizeof(mouseP)); dMouse=Point(); uiKeyUp=&emotes;
+    emotes.open(); event.accept(); return;
+    }
   if(Gothic::inst().isGuest()) {
     if(event.key==Event::K_R && canRejoinNetwork()) {
       rejoinNetwork();
@@ -546,6 +573,7 @@ void MainWindow::keyDownEvent(KeyEvent &event) {
   }
 
 void MainWindow::keyRepeatEvent(KeyEvent& event) {
+  if(emotes.isActive()) { event.accept(); return; }
   if(inventory.isOpen()==InventoryMenu::State::Trade) { inventory.keyRepeatEvent(event); return; }
   if(Gothic::inst().isCoopFailed() && uiKeyUp!=&rootMenu) return;
   if(uiKeyUp==&video){
@@ -577,6 +605,9 @@ void MainWindow::keyRepeatEvent(KeyEvent& event) {
   }
 
 void MainWindow::keyUpEvent(KeyEvent &event) {
+  if(uiKeyUp==&emotes || emotes.isActive()) {
+    uiKeyUp=nullptr; event.accept(); return;
+    }
   if(Gothic::inst().isGuest()) {
     if(rootMenu.isActive() || uiKeyUp==&rootMenu) {
       uiKeyUp=nullptr;
@@ -993,6 +1024,7 @@ uint64_t MainWindow::tick() {
     return 0;
   lastTick  = time;
 
+  if(emotes.isActive() && !canOpenEmotes()) emotes.close();
   auto st = Gothic::inst().checkLoading();
   if(st==Gothic::LoadState::Finalize || st==Gothic::LoadState::FailedLoad || st==Gothic::LoadState::FailedSave) {
     const bool wasSaving = returningFromSave;
@@ -1051,6 +1083,8 @@ uint64_t MainWindow::tick() {
 
   tickNetworkInput(true); // Install input only when this frame will process controllers.
   dialogs.tick(dt);
+  if(dialogs.isActive())
+    for(auto& entry:Gothic::inst().world()->players()) entry.second->cancelEmote();
   inventory.tick(dt);
   Gothic::inst().tick(dt);
   if(handleCoopFailure()) { update(); return 0; }

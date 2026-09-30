@@ -372,12 +372,15 @@ void MainWindow::replyTestControl(std::string_view id, std::string_view error,
       for(auto it=owner->inventory().iterator(Inventory::T_Inventory); it.isValid(); ++it)
         itemInfo(*it,it.count(),it.isEquipped(),it.slot());
     out.EndArray();
+    out.Key("emote_menu"); out.Bool(emotes.isActive());
     out.Key("players"); out.StartArray();
     for(auto& entry:world->players()) {
       auto actor = entry.second;
       auto pos = actor->position();
       out.StartObject();
       out.Key("id"); out.Uint64(entry.first);
+      out.Key("emote"); out.Uint(actor->emoteId());
+      out.Key("emote_started"); out.Uint64(actor->emoteStart());
       out.Key("object_id"); out.Uint64(world->objectId(actor));
       out.Key("npc_index"); out.Uint(world->npcId(actor)); // Diagnostic only; not a persistent ID.
       out.Key("position"); out.StartArray();
@@ -632,6 +635,7 @@ void MainWindow::pollTestControl() {
         throw std::runtime_error("Expected 1..4 keys");
       struct Mapping { std::string_view name; Event::KeyType key; };
       static const Mapping keys[] = {
+        {"V",Event::K_V}, {"0",Event::K_0}, {"1",Event::K_1}, {"2",Event::K_2}, {"3",Event::K_3}, {"4",Event::K_4}, {"5",Event::K_5}, {"6",Event::K_6}, {"7",Event::K_7}, {"8",Event::K_8}, {"9",Event::K_9},
         {"UP",Event::K_Up}, {"DOWN",Event::K_Down},
         {"LEFT",Event::K_Left}, {"RIGHT",Event::K_Right},
         {"W",Event::K_W}, {"A",Event::K_A}, {"S",Event::K_S}, {"D",Event::K_D},

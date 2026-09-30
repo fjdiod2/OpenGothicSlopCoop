@@ -38,6 +38,7 @@
 #include "ui/documentmenu.h"
 #include "ui/videowidget.h"
 #include "ui/menuroot.h"
+#include "ui/emotemenu.h"
 #include "ui/consolewidget.h"
 #include "ui/touchinput.h"
 
@@ -101,6 +102,9 @@ class MainWindow : public Tempest::Window {
     void onSettings();
 
     void setupUi();
+    bool canOpenEmotes() const;
+    void selectEmote(uint8_t id);
+    EmoteMenu emotes;
 
     void render() override;
 

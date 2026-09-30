@@ -1,4 +1,4 @@
-# Co-op wire protocol, version 13 (guest jump/sneak)
+# Co-op wire protocol, version 14 (cosmetic emotes)
 
 This document specifies the asset-independent codec in
 [`common/network/protocol.h`](../common/network/protocol.h) and
@@ -14,6 +14,10 @@ connect on macOS loopback. N05 binds the host's saved companion to that connecti
 N07 makes the guest a presentation-only process; N08 transfers a host checkpoint,
 and N09 routes movement/turning input with ordered acknowledgements. The codec
 is shared engine source, not a separate mock protocol used only by tests.
+
+Version 14 adds an emote byte to Input (111 bytes total) and nine bytes to each
+personal record (237 bytes). Version-13 peers are rejected. Checkpoints remain
+version 56; cosmetic playback is never saved.
 
 Version 13 enables guest jump (bit 6) and adds sneak toggle (bit 10), routed
 through the original authoritative player controller. Version-12 peers are
@@ -73,7 +77,7 @@ Every frame begins with this 44-byte header. Offsets are zero-based:
 | --- | --- | --- | --- |
 | 0 | 4 | Magic | Literal ASCII `OGCP` (`4f 47 43 50`) |
 | 4 | 4 | Frame length | Total bytes, including this header |
-| 8 | 2 | Version | Exactly `13` |
+| 8 | 2 | Version | Exactly `14` |
 | 10 | 2 | Message type | Defined below; unknown types are fatal |
 | 12 | 8 | Generation | Host-issued connection/world generation; zero before acceptance |
 | 20 | 8 | Player | Persistent actor ID assigned by the host; zero before actor binding |
@@ -93,7 +97,7 @@ animation-name/unused slots specified below.
 | --- | --- | --- | --- | --- |
 | 1 | `Hello` | Guest → host | 108 | `0 / 0 / 0 / 0` |
 | 2 | `Welcome` | Host → guest | 44 | `nonzero / nonzero / 0 / nonzero` |
-| 3 | `Input` | Guest → host | 110 | `nonzero / nonzero / nonzero / 0` |
+| 3 | `Input` | Guest → host | 111 | `nonzero / nonzero / nonzero / 0` |
 | 4 | `StateAck` | Host → guest | 52 | `nonzero / nonzero / 0 / nonzero` |
 | 5 | `Reject` | Host → guest | 46 | `0 / 0 / 0 / 0` |
 | 6 | `Accepted` | Host → guest | 108 | `nonzero / 0 / 0 / 0` |
@@ -222,6 +226,7 @@ EOF and cancellation while the application owns a completed snapshot.
 | 68 | 8 | Inventory instance + 1, or zero |
 | 76 | 1 | Inventory action: 0 none, 1 equip, 2 unequip, 3 consume once |
 | 77–109 | 33 | Dialogue intent; see [G09 fields](#guest-initiated-host-story-dialogue-g09) |
+| 110 | 1 | Emote: 0 none, 1–12 select, 13 cancel |
 
 | Bit | Mask | Action |
 | --- | --- | --- |
@@ -309,7 +314,7 @@ This frame contains a 24-byte prefix, two 729-byte actor records in player order
 1, 2, two 16-byte weapon-equipment records, a u16 pickup count and zero to
 sixteen 56-byte pickup records, two 66-byte combat/progression records, a u16 NPC
 count and zero to 32 NPC combat records of 795 bytes each, followed by two
-228-byte personal records (host, companion), a u32 story length and optional story
+237-byte personal records (host, companion), a u32 story length and optional story
 archive. The fixed fields contain no native structs, pointers or array indexes. The header's player 2 identifies the recipient binding, not an actor
 index within the payload.
 
@@ -327,9 +332,9 @@ index within the payload.
 | 1516 + pickup count × 56 | 132 | Host then companion combat/progression records |
 | 1648 + pickup count × 56 | 2 | NPC combat count, 0–32 |
 | 1650 + pickup count × 56 | NPC count × 795 | NPC updates |
-| 1650 + pickup count × 56 + NPC count × 795 | 456 | Host then companion personal records |
-| 2106 + pickup count × 56 + NPC count × 795 | 4 | Story archive byte count, 0–32,768 |
-| 2110 + pickup count × 56 + NPC count × 795 | variable | Optional story archive |
+| 1650 + pickup count × 56 + NPC count × 795 | 474 | Host then companion personal records |
+| 2124 + pickup count × 56 + NPC count × 795 | 4 | Story archive byte count, 0–32,768 |
+| 2128 + pickup count × 56 + NPC count × 795 | variable | Optional story archive |
 
 Each actor record is:
 
@@ -530,7 +535,7 @@ items without executing constructors/use callbacks. Invalid later records reject
 the entire frame. The decoder releases variable transfer/NPC bytes when a frame
 is dequeued, so ongoing item traffic cannot exhaust a phantom queue budget.
 
-Each 228-byte personal record contains:
+Each 237-byte personal record contains:
 
 | Offset | Bytes | Field |
 | --- | --- | --- |
@@ -539,6 +544,8 @@ Each 228-byte personal record contains:
 | 176 | 12 | Nonnegative i32 `REAL_STRENGTH`, `REAL_DEXTERITY`, `REAL_MANA_MAX` counters |
 | 188 | 8 | Held consumable instance + 1, or zero |
 | 196 | 32 | Printable ASCII bone name, zero padded |
+| 228 | 1 | Cosmetic emote ID, 0–12 |
+| 229 | 8 | Host start tick; zero when emote is zero, never greater than pose tick |
 
 A zero held instance requires an empty slot; a nonzero instance must resolve to
 an audited item remaining in the projected inventory and slot `ZS_RIGHTHAND` or
@@ -1093,11 +1100,11 @@ Connections are loopback-only. Internet transport/security is outside N04.
 
 ## Golden example
 
-This 110-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
+This 111-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 `9`, revision `0`, held `Forward | Walk`, look X `-5` and look Y `100`:
 
 ```text
-4f474350 0000006e 000d 0003
+4f474350 0000006f 000e 0003
 0102030405060708 0000000000000002
 0000000000000009 0000000000000000
 00000081 fffb 0064
@@ -1105,6 +1112,7 @@ This 110-byte `Input` uses generation `0x0102030405060708`, player `2`, sequence
 0000000000000000 00
 00 0000000000000000 0000000000000000
 0000000000000000 0000000000000000
+00
 ```
 
 The test suite checks this literal against both encoding and decoding. It also
@@ -1391,3 +1399,29 @@ and actor archives persist stock, gold, items and chapter stock flags, so no sav
 schema migration is needed. Bosper's original per-visit arrow/bolt refresh and
 chapter-based stock/junk cleanup remain shared host effects. Persistence tests
 compare saved inventories before reopening, then test another real transaction.
+
+## Cosmetic emotes (E01)
+
+V opens an engine-owned picker; this key is fixed in the first version. Original
+menu/game/animation scripts are unchanged. IDs 1–12 are, in order: Yes, No, Shrug,
+Greet left, Greet right, Bow, Come here, Go away, Threaten, Scratch head, Dance 01,
+Afraid (`S_FEAR_VICTIM1`). See `common/game/emotes.h` for exact animation names.
+
+Guest selection uses the existing ordered Input stream, companion binding and
+generation checks. It is automatically processed by the host, with no human
+approval. Emote intents cannot mix movement, look, pickup, inventory or dialogue
+commands. Duplicate/stale input follows existing fencing. The host starts the
+performance only on a living, standing, grounded, unarmed actor outside dialogue
+and cutscenes. Ordinary gameplay input remains available and takes priority.
+
+Both peers receive the selected ID and start tick in existing Poses personal
+records. They render a separate cosmetic skeleton pose, including attached head
+and sheathed equipment. This pose never feeds physics, AI, damage windows, script
+events, particles or sound events. Fear therefore has no spell ghosts or sound;
+dance cannot move the gameplay position. Original animation assets are reused.
+Movement, reduced HP, leaving the standing state, drawing a weapon, interaction,
+dialogue or reaching the clip's end cancels playback. Saves contain the ordinary
+gameplay pose only; reload/rejoin do not restore an emote from disk.
+
+The picker supports clicks, arrows and Enter, digits 1–9 and 0 for its first ten
+entries, and V/Escape/right click to close. It does not pause the world.

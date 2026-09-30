@@ -42,7 +42,7 @@ size_t bodySize(MessageType type) {
     case MessageType::Hello:    return 64;
     case MessageType::Accepted: return 64;
     case MessageType::Welcome:  return 0;
-    case MessageType::Input:    return 66;
+    case MessageType::Input:    return 67;
     case MessageType::StateAck: return 8;
     case MessageType::Reject:   return 2;
     case MessageType::SnapshotBegin: return 40;
@@ -129,6 +129,8 @@ void validatePayload(const Message& message) {
       };
     for(const auto& state:poses->progression) validateCombat(state);
     for(const auto& state:poses->personal) {
+      if(state.emote>MaxEmotes || (state.emote==0 && state.emoteStarted!=0) || state.emoteStarted>poses->tick)
+        invalid(ProtocolErrorCode::Fields,"Invalid emote state");
       for(auto value:state.skills) if(value<0 || value>6) invalid(ProtocolErrorCode::Fields,"Invalid talent skill");
       for(auto value:state.values) if(value<0 || value>100) invalid(ProtocolErrorCode::Fields,"Invalid talent value");
       for(auto value:state.counters) if(value<0) invalid(ProtocolErrorCode::Fields,"Invalid personal counter");
@@ -158,6 +160,8 @@ void validatePayload(const Message& message) {
       invalid(ProtocolErrorCode::Size,"Invalid snapshot chunk");
     }
   if(auto input = std::get_if<Input>(&message.payload)) {
+    if(input->emote>MaxEmotes+1 || (input->emote && (input->buttons || input->lookX || input->lookY || input->pickupItem || input->equipmentItem || input->dialogueAction)))
+      invalid(ProtocolErrorCode::Fields,"Invalid emote intent");
     const bool hasDialog = input->dialogueAction!=0;
     const bool transaction = input->dialogueAction==6 || input->dialogueAction==7;
     if(input->dialogueAction>8 ||
@@ -319,6 +323,7 @@ Message decode(std::span<const uint8_t> bytes) {
           else if(padding) invalid(ProtocolErrorCode::Fields,"Invalid held slot padding");
           else state.heldSlot.push_back(c);
           }
+        state.emote=uint8_t(integer(1)); state.emoteStarted=integer(8);
         }
       const auto storySize=integer(4);
       if(storySize>MaxStoryBytes || storySize!=bytes.size()-offset)
@@ -338,7 +343,7 @@ Message decode(std::span<const uint8_t> bytes) {
       message.payload = SnapshotChunk{get(bytes,44,8),Bytes(bytes.begin()+52,bytes.end())};
       break;
     case MessageType::Input:
-      message.payload = Input{uint32_t(get(bytes,44,4)),getSigned(bytes,48),getSigned(bytes,50),get(bytes,52,8),get(bytes,60,8),get(bytes,68,8),uint8_t(get(bytes,76,1)),uint8_t(get(bytes,77,1)),get(bytes,78,8),get(bytes,86,8),get(bytes,94,8),get(bytes,102,8)};
+      message.payload = Input{uint32_t(get(bytes,44,4)),getSigned(bytes,48),getSigned(bytes,50),get(bytes,52,8),get(bytes,60,8),get(bytes,68,8),uint8_t(get(bytes,76,1)),uint8_t(get(bytes,77,1)),get(bytes,78,8),get(bytes,86,8),get(bytes,94,8),get(bytes,102,8),uint8_t(get(bytes,110,1))};
       break;
     case MessageType::StateAck:
       message.payload = StateAck{get(bytes,44,8)};
@@ -447,6 +452,7 @@ Bytes encode(const Message& message) {
         put(bytes,state.heldItem,8);
         bytes.insert(bytes.end(),state.heldSlot.begin(),state.heldSlot.end());
         bytes.resize(bytes.size()+HeldSlotBytes-state.heldSlot.size(),0);
+        put(bytes,state.emote,1); put(bytes,state.emoteStarted,8);
         }
       put(bytes,poses.story.size(),4);
       bytes.insert(bytes.end(),poses.story.begin(),poses.story.end());
@@ -474,6 +480,7 @@ Bytes encode(const Message& message) {
       put(bytes,input.dialogueAction,1);
       put(bytes,input.dialogueWorld,8); put(bytes,input.dialogueTarget,8);
       put(bytes,input.dialogueId,8); put(bytes,input.dialogueRevision,8);
+      put(bytes,input.emote,1);
       break;
       }
     case MessageType::StateAck:

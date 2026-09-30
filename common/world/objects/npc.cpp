@@ -1,4 +1,5 @@
 #include "npc.h"
+#include "game/emotes.h"
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Log>
@@ -440,6 +441,7 @@ Coop::PlayerState Npc::networkPlayerState() const {
     if(index<0 || index>=100) throw std::runtime_error("Missing audited personal counter");
     state.counters[n++]=hnpc->aivar[index];
     }
+  state.emote=emote; state.emoteStarted=emoteStarted;
   invent.networkHeldItem(state,owner);
   return state;
   }
@@ -454,6 +456,13 @@ void Npc::applyNetworkPlayerState(const Coop::PlayerState& state) {
   for(auto name:{"REAL_STRENGTH","REAL_DEXTERITY","REAL_MANA_MAX"})
     hnpc->aivar[owner.script().findSymbol(name)->get_int()]=state.counters[n++];
   invent.applyNetworkHeldItem(state,*this);
+  if(emote!=state.emote || emoteStarted!=state.emoteStarted) {
+    cancelEmote();
+    if(state.emote && state.emote<=Emotes.size()) {
+      emote=state.emote; emoteStarted=state.emoteStarted;
+      visual.setEmote(Emotes[emote-1].animation,emoteStarted);
+      }
+    }
   }
 
 Coop::CombatState Npc::networkCombatState() const {
@@ -1349,6 +1358,7 @@ void Npc::changeAttribute(Attribute a, int32_t val, bool allowUnconscious) {
       return;
     }
 
+  if(a==ATR_HITPOINTS && val<0) cancelEmote();
   hnpc->attribute[a]+=val;
   if(hnpc->attribute[a]<0)
     hnpc->attribute[a]=0;
@@ -2438,8 +2448,31 @@ void Npc::tickAnimationTags() {
   tickTimedEvt(ev);
   }
 
+bool Npc::requestEmote(uint8_t id) {
+  static_assert(Emotes.size()==Coop::MaxEmotes);
+  if(!owner.isAuthoritative() || !isPlayer()) return false;
+  if(id==Coop::MaxEmotes+1) { cancelEmote(); return true; }
+  if(id==0 || id>Emotes.size() || isDown() || isInAir() || !isStanding() ||
+     bodyStateMasked()!=BS_STAND || weaponState()!=WeaponState::NoWeapon || interactive()!=nullptr)
+    return false;
+  const auto start=owner.tickCount();
+  const auto duration=visual.setEmote(Emotes[id-1].animation,start);
+  if(!duration) return false;
+  emote=id; emoteStarted=start; emoteUntil=start+duration;
+  emotePosition=position(); emoteHp=attribute(ATR_HITPOINTS);
+  return true;
+  }
+
+void Npc::cancelEmote() {
+  if(emote) visual.clearEmote();
+  emote=0; emoteStarted=emoteUntil=0;
+  }
+
 void Npc::tick(uint64_t dt) {
   if(!owner.isAuthoritative()) return;
+  if(emote && (owner.tickCount()>=emoteUntil || attribute(ATR_HITPOINTS)<emoteHp || isDown() ||
+     isInAir() || !isStanding() || bodyStateMasked()!=BS_STAND || weaponState()!=WeaponState::NoWeapon ||
+     interactive()!=nullptr || (position()-emotePosition).quadLength()>1.f)) cancelEmote();
   static bool dbg = false;
   static int  kId = 432;
   if(dbg && !isPlayer() && hnpc->id!=kId)

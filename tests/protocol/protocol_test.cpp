@@ -41,10 +41,10 @@ Message input(uint64_t sequence=9) {
 
 // Independent literal from docs/coop-protocol.md, not constructed by the codec.
 Bytes goldenInput() {
-  return hex("4f4743500000006e000d0003"
+  return hex("4f4743500000006f000e0003"
              "0102030405060708" "0000000000000002"
              "0000000000000009" "0000000000000000"
-             "00000081fffb0064" "0000000000000000" "0000000000000000" "000000000000000000" "000000000000000000000000000000000000000000000000000000000000000000");
+             "00000081fffb0064" "0000000000000000" "0000000000000000" "000000000000000000" "00000000000000000000000000000000000000000000000000000000000000000000");
   }
 
 Poses samplePoses() {
@@ -109,10 +109,10 @@ void drain(Decoder& decoder, const std::vector<Message>& expected) {
 
 void pickupTransfers() {
   const Message request {4,2,9,0,Input{0,0,0,123,33}};
-  const auto literal = hex("4f4743500000006e000d0003"
+  const auto literal = hex("4f4743500000006f000e0003"
                            "0000000000000004" "0000000000000002"
                            "0000000000000009" "0000000000000000"
-                           "0000000000000000" "000000000000007b" "0000000000000021" "000000000000000000" "000000000000000000000000000000000000000000000000000000000000000000");
+                           "0000000000000000" "000000000000007b" "0000000000000021" "000000000000000000" "00000000000000000000000000000000000000000000000000000000000000000000");
   REQUIRE(encode(request)==literal);
   auto poses = samplePoses();
   poses.pickups.push_back({2,12,33,100,1,2,3});
@@ -153,18 +153,18 @@ void pickupTransfers() {
 
 void weaponEquipment() {
   const Message request {4,2,9,0,Input{0,0,0,0,0,101,1}};
-  const auto literal = hex("4f4743500000006e000d0003"
+  const auto literal = hex("4f4743500000006f000e0003"
                            "0000000000000004" "0000000000000002"
                            "0000000000000009" "0000000000000000"
                            "0000000000000000" "0000000000000000" "0000000000000000"
-                           "0000000000000065" "01" "000000000000000000000000000000000000000000000000000000000000000000");
+                           "0000000000000065" "01" "00000000000000000000000000000000000000000000000000000000000000000000");
   REQUIRE(encode(request)==literal);
   auto poses = samplePoses();
   poses.equipment = {{{101,201},{301,401}}};
   Message state {4,2,0,2,poses};
   const auto bytes = encode(state);
   const auto slots = hex("0000000000000065" "00000000000000c9" "000000000000012d" "0000000000000191");
-  REQUIRE(bytes.size()==2154 && std::equal(slots.begin(),slots.end(),bytes.begin()+1526));
+  REQUIRE(bytes.size()==2172 && std::equal(slots.begin(),slots.end(),bytes.begin()+1526));
   for(const auto& message:{request,state}) {
     const auto encoded = encode(message);
     for(size_t split=0; split<=encoded.size(); ++split) {
@@ -236,7 +236,7 @@ void consumables() {
     if(fault==9) bad.personal[1].heldSlot="\t";
     error(ProtocolErrorCode::Fields,[&] { encode({4,2,0,2,bad}); });
     }
-  bytes[bytes.size()-5]='A'; // Nonzero byte after the slot's zero padding.
+  bytes[bytes.size()-14]='A'; // Nonzero byte after the slot's zero padding.
   Decoder padding; error(ProtocolErrorCode::Fields,[&] { padding.feed(bytes); });
   // Repeated variable inventory frames must release their entire queue budget.
   Decoder stream;
@@ -285,7 +285,7 @@ void dialogueIntents() {
     request.dialogueRevision=action==1 ? 0 : 8;
     message.payload=request;
     const auto bytes=encode(message);
-    REQUIRE(bytes.size()==110 && bytes[77]==action);
+    REQUIRE(bytes.size()==111 && bytes[77]==action);
     for(size_t split=0;split<=bytes.size();++split) {
       Decoder decoder;
       decoder.feed(std::span(bytes).first(split)); decoder.feed(std::span(bytes).subspan(split));
@@ -315,18 +315,43 @@ void tradeBounds() {
     }
   }
 
+void emotes() {
+  for(uint8_t id=0;id<=MaxEmotes+1;++id) {
+    Input intent; intent.emote=id;
+    Message m{4,2,9,0,intent};
+    auto bytes=encode(m);
+    REQUIRE(bytes.size()==111 && bytes[110]==id);
+    Decoder d; d.feed(bytes); drain(d,{m});
+    }
+  auto poses=samplePoses(); poses.personal[1].emote=12; poses.personal[1].emoteStarted=99;
+  Message m{4,2,0,2,poses}; auto bytes=encode(m); Decoder d; d.feed(bytes); drain(d,{m});
+  for(int fault=0;fault<4;++fault) {
+    auto bad=poses;
+    if(fault==0) bad.personal[1].emote=13;
+    if(fault==1) bad.personal[1].emote=0;
+    if(fault==2) bad.personal[1].emoteStarted=101;
+    if(fault<3) error(ProtocolErrorCode::Fields,[&]{ encode({4,2,0,2,bad}); });
+    else {
+      Input input; input.emote=14;
+      error(ProtocolErrorCode::Fields,[&]{ encode({4,2,9,0,input}); });
+      input.emote=1; input.buttons=Forward;
+      error(ProtocolErrorCode::Fields,[&]{ encode({4,2,9,0,input}); });
+      }
+    }
+  }
+
 void golden() {
   const auto pose = encode({4,2,0,2,samplePoses()});
-  const auto prefix = hex("4f4743500000086a000d000b"
+  const auto prefix = hex("4f4743500000087c000e000b"
                           "0000000000000004" "0000000000000002"
                           "0000000000000000" "0000000000000002"
                           "000000000000007b" "0000000000000064" "0000000000000000"
                           "0000000000000001" "000000000000000b"
                           "3fa00000c02000004040000042b40000"
                           "00000000000000000000000000000000" "01535f52554e");
-  REQUIRE(pose.size()==2154 && std::equal(prefix.begin(),prefix.end(),pose.begin()));
+  REQUIRE(pose.size()==2172 && std::equal(prefix.begin(),prefix.end(),pose.begin()));
   const auto bytes = goldenInput();
-  REQUIRE(bytes.size()==110);
+  REQUIRE(bytes.size()==111);
   REQUIRE(encode(input())==bytes);
   Decoder decoder;
   decoder.feed(bytes);
@@ -342,7 +367,7 @@ void combatState() {
   poses.npcs.push_back({pose,{{0,70,0,0,35,35,0,0},0,0,50,0,11,12,1,2}});
   Message message{4,2,0,2,poses};
   const auto bytes=encode(message);
-  REQUIRE(bytes.size()==2949);
+  REQUIRE(bytes.size()==2967);
   const auto literal=hex("00000025000000340000000a0000000a0000000f0000000c0000000000000000"
                          "000001f4000005dc000000010000000a000000000000002100000000000000210100");
   REQUIRE(std::equal(literal.begin(),literal.end(),bytes.begin()+1560));
@@ -393,7 +418,7 @@ void messageTypes() {
     }
   // A second literal covers the variable fingerprints and byte order of a
   // different message type, so matching encode/decode bugs cannot hide it.
-  const auto hello = hex("4f4743500000006c000d0001"
+  const auto hello = hex("4f4743500000006c000e0001"
                          "00000000000000000000000000000000"
                          "00000000000000000000000000000000"
                          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -647,19 +672,19 @@ void writeLimits() {
   REQUIRE(queue.enqueue(input()));
   REQUIRE(queue.enqueue(input(10)));
   REQUIRE(!queue.enqueue(input(11)));
-  REQUIRE(queue.pendingBytes()==220 && queue.retainedBytes()==220);
-  queue.consume(109);
-  REQUIRE(queue.pendingBytes()==111 && queue.retainedBytes()==220);
+  REQUIRE(queue.pendingBytes()==222 && queue.retainedBytes()==222);
+  queue.consume(110);
+  REQUIRE(queue.pendingBytes()==112 && queue.retainedBytes()==222);
   REQUIRE(!queue.enqueue(input(11))); // A partial frame still occupies storage.
   queue.consume(1);
-  REQUIRE(queue.pendingBytes()==110 && queue.retainedBytes()==110);
+  REQUIRE(queue.pendingBytes()==111 && queue.retainedBytes()==111);
   REQUIRE(queue.enqueue(input(11)));
-  error(ProtocolErrorCode::WriteCount,[&] { queue.consume(111); });
-  REQUIRE(queue.pendingBytes()==220 && queue.queuedMessages()==2);
+  error(ProtocolErrorCode::WriteCount,[&] { queue.consume(112); });
+  REQUIRE(queue.pendingBytes()==222 && queue.queuedMessages()==2);
   auto invalid = input();
   invalid.sequence = 0;
   error(ProtocolErrorCode::Fields,[&] { queue.enqueue(invalid); });
-  REQUIRE(queue.pendingBytes()==220 && queue.queuedMessages()==2);
+  REQUIRE(queue.pendingBytes()==222 && queue.queuedMessages()==2);
   WriteQueue count({MaxQueueBytes,1});
   REQUIRE(count.enqueue(input()));
   REQUIRE(!count.enqueue(input(10)));
@@ -782,7 +807,7 @@ void malformedStress() {
 
 int main(int argc, char** argv) {
   const std::vector<std::pair<std::string,std::function<void()>>> cases = {
-    {"dialogue-intents",dialogueIntents},{"story-projection",storyProjection},{"golden",golden},{"pickup-transfers",pickupTransfers},{"weapon-equipment",weaponEquipment},{"consumables",consumables},{"combat-state",combatState},{"message-types",messageTypes},{"fragments",fragments},
+    {"emotes",emotes},{"dialogue-intents",dialogueIntents},{"story-projection",storyProjection},{"golden",golden},{"pickup-transfers",pickupTransfers},{"weapon-equipment",weaponEquipment},{"consumables",consumables},{"combat-state",combatState},{"message-types",messageTypes},{"fragments",fragments},
     {"combined",combined},{"malformed-header",malformedHeader},{"malformed-payload",malformedPayload},
     {"encode-validation",encodeValidation},{"eof",eof},{"receive-limits",receiveLimits},
     {"write-limits",writeLimits},{"partial-writes",partialWrites},

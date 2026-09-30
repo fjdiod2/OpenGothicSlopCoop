@@ -503,6 +503,21 @@ bool MdlVisual::isUsingTorch() const {
   return torch.view!=nullptr;
   }
 
+uint64_t MdlVisual::setEmote(std::string_view name, uint64_t started) {
+  auto sq=solver.solveFrm(name);
+  if(!sq) return 0;
+  emotePose=std::make_unique<Pose>(*skInst);
+  emotePose->stopAllAnim();
+  emotePose->startAnim(solver,sq,0,BS_NONE,Pose::Force,started);
+  return uint64_t(sq->totalTime());
+  }
+
+void MdlVisual::clearEmote() {
+  emotePose.reset();
+  // Force the ordinary skeleton back into the mesh even if it is idle.
+  view.setPose(pos,*skInst);
+  }
+
 bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force) {
   Pose&    pose      = *skInst;
   uint64_t tickCount = world.presentationTickCount();
@@ -532,6 +547,12 @@ bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint
   pose.setObjectMatrix(pos,false);
   const bool changed = pose.update(tickCount, force);
 
+  if(emotePose) {
+    emotePose->setObjectMatrix(pos,false);
+    emotePose->update(tickCount,true);
+    view.setPose(pos,*emotePose);
+    return true;
+    }
   if(changed)
     view.setPose(pos,pose);
   return changed;
@@ -893,7 +914,7 @@ void MdlVisual::syncAttaches() {
   pfx.view.setObjMatrix(pos);
   hnpcVisual.view.setObjMatrix(pos);
   if(torch.view!=nullptr) {
-    auto& pose = *skInst;
+    auto& pose = emotePose ? *emotePose : *skInst;
     auto  p    = pos;
     if(torch.boneId<pose.boneCount())
       p = pose.bone(torch.boneId);
@@ -917,7 +938,7 @@ template<class View>
 void MdlVisual::syncAttaches(Attach<View>& att) {
   if(att.view.isEmpty())
     return;
-  auto& pose = *skInst;
+  auto& pose = emotePose ? *emotePose : *skInst;
   auto  p    = pos;
   if(att.boneId<pose.boneCount())
     p = pose.bone(att.boneId);

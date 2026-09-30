@@ -96,6 +96,10 @@ class Npc final {
     void       applyNetworkPose(const Coop::ActorPose& pose);
     Coop::CombatState networkCombatState() const;
     Coop::PlayerState networkPlayerState() const;
+    bool requestEmote(uint8_t id);
+    void cancelEmote();
+    uint8_t emoteId() const { return emote; }
+    uint64_t emoteStart() const { return emoteStarted; }
     void       applyNetworkPlayerState(const Coop::PlayerState& state);
     bool       validateNetworkCombatState(const Coop::CombatState& state) const;
     void       applyNetworkCombatState(const Coop::CombatState& state);
@@ -571,6 +575,10 @@ class Npc final {
     int32_t                        vHead = 0, vTeeth = 0, vColor = 0;
     int32_t                        bdColor = 0;
     float                          bdFatness = 0;
+    uint8_t emote=0;
+    uint64_t emoteStarted=0, emoteUntil=0;
+    Tempest::Vec3 emotePosition;
+    int32_t emoteHp=0;
     MdlVisual                      visual;
 
     // visual props (cache)

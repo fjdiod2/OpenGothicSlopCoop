@@ -75,6 +75,8 @@ class MdlVisual final {
     void                           setTorch(bool t, World& owner);
     bool                           isUsingTorch() const;
 
+    uint64_t setEmote(std::string_view name, uint64_t started);
+    void clearEmote();
     const Pose&                    pose() const { return *skInst; }
     bool validateNetworkLayers(const std::vector<Coop::AnimationLayer>& layers) const;
     void applyNetworkLayers(const std::vector<Coop::AnimationLayer>& layers);
@@ -119,6 +121,7 @@ class MdlVisual final {
     Bounds                         bounds() const;
 
   private:
+    std::unique_ptr<Pose> emotePose; // Presentation only: never drives tags, physics or saves.
     template<class View>
     struct Attach {
       size_t           boneId=size_t(-1);

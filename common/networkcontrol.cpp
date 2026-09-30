@@ -97,6 +97,8 @@ bool MainWindow::handleCoopFailure() {
      !game.gameSession()->observeCoopFailure()) return false;
   if(!handledCoopFailure) {
     handledCoopFailure=true;
+    emotes.close();
+    for(auto& entry:game.world()->players()) entry.second->cancelEmote();
     clearInput();
     testHeldKeys.clear();
     testReleaseAt=0;
@@ -363,6 +365,11 @@ void MainWindow::tickNetworkInput(bool apply) {
   while(auto message = network.takeInput()) {
     auto input = std::get<Coop::Input>(message->payload);
     networkInstalledInput = message->sequence;
+    if(input.emote) {
+      if(!dialogs.isActive() && !video.isActive() && game.world()->currentCs()==nullptr)
+        game.world()->playerById(PlayerIdentity::Companion)->requestEmote(input.emote);
+      continue;
+      }
     if(input.dialogueAction) {
       if(input.dialogueWorld==game.world()->objectRegistry().worldNamespace() &&
          !video.isActive() && (!inventory.isActive() || inventory.isOpen()==InventoryMenu::State::Trade) && game.world()->currentCs()==nullptr) {
