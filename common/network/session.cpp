@@ -101,7 +101,7 @@ struct Session::Impl {
   NetworkStatus state;
   Hello identity;
   uint64_t nextGeneration = 0;
-  uint64_t now = 0, resolveStarted = 0;
+  uint64_t tickTime = 0, resolveStarted = 0;
   std::shared_ptr<Net::Resolution> resolution;
   std::shared_ptr<TlsContext> tlsContext;
   struct Peer {
@@ -514,7 +514,7 @@ bool Session::sendSnapshot(uint64_t generation, uint64_t revision, Bytes data) {
     peer->total = data.size();
     peer->snapshot = std::move(data);
     // The application calls this immediately after tick(); use that clock.
-    peer->deadline = self.now+SnapshotTimeoutMs;
+    peer->deadline = self.tickTime+SnapshotTimeoutMs;
     self.state.snapshotState = "sending";
     self.state.snapshotRevision = revision;
     self.state.snapshotBytes = peer->total;
@@ -541,7 +541,7 @@ bool Session::snapshotLoaded(uint64_t generation, uint64_t revision) {
     if(peer->transfer!=Impl::Peer::Loading || peer->generation!=generation || peer->revision!=revision) continue;
     if(!peer->output.enqueue({generation,PlayerIdentity::Companion,0,revision,SnapshotReady{}})) return false;
     peer->transfer = Impl::Peer::Ready;
-    peer->lastReceive = peer->lastHeartbeat = impl->now;
+    peer->lastReceive = peer->lastHeartbeat = impl->tickTime;
     impl->state.snapshotState = "ready";
     impl->event("snapshot_loaded");
     return true;
@@ -698,7 +698,7 @@ void Session::start(Endpoint endpoint, const Hello& identity, uint64_t now) {
 
 void Session::tick(uint64_t now) {
   auto& self = *impl;
-  self.now = now;
+  self.tickTime = now;
   try {
     if(self.resolution) {
       if(now-self.resolveStarted>=HandshakeTimeoutMs) {

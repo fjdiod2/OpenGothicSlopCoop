@@ -389,8 +389,8 @@ Bytes encode(const Message& message) {
   validatePayload(message);
   Bytes bytes;
   const auto chunk = std::get_if<SnapshotChunk>(&message.payload);
-  const auto poses = std::get_if<Poses>(&message.payload);
-  const auto length = HeaderBytes+bodySize(type)+(chunk ? chunk->data.size() : 0)+(poses ? poses->pickups.size()*PickupBytes+poses->npcs.size()*(ActorPoseBytes+CombatStateBytes)+poses->story.size() : 0);
+  const auto posePayload = std::get_if<Poses>(&message.payload);
+  const auto length = HeaderBytes+bodySize(type)+(chunk ? chunk->data.size() : 0)+(posePayload ? posePayload->pickups.size()*PickupBytes+posePayload->npcs.size()*(ActorPoseBytes+CombatStateBytes)+posePayload->story.size() : 0);
   if(length>MaxFrameBytes) invalid(ProtocolErrorCode::Size,"Frame too large");
   bytes.reserve(length);
   bytes.insert(bytes.end(),{'O','G','C','P'});

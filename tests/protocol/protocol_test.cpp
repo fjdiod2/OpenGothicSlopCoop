@@ -132,7 +132,7 @@ void pickupTransfers() {
   std::get<Input>(bad.payload).pickupWorld = 0;
   error(ProtocolErrorCode::Fields,[&] { encode(bad); });
   auto half = literal;
-  std::fill(half.begin()+52,half.begin()+60,0);
+  std::fill(half.begin()+52,half.begin()+60,uint8_t(0));
   Decoder decoder;
   error(ProtocolErrorCode::Fields,[&] { decoder.feed(half); });
   for(int fault=0; fault<6; ++fault) {
@@ -537,7 +537,8 @@ void malformedHeader() {
   }
 
 void malformedPayload() {
-  for(auto [offset,value]:std::vector<std::pair<size_t,uint8_t>>{{116,9},{123,65},{202,65},{84,0x7f}}) {
+  for(auto [offset,value]:std::vector<std::pair<size_t,uint8_t>>{
+        {116,uint8_t(9)},{123,uint8_t(65)},{202,uint8_t(65)},{84,uint8_t(0x7f)}}) {
     auto bytes = encode({4,2,0,2,samplePoses()});
     // Count overflow, invalid padding, a nonzero unused slot, and NaN x.
     if(offset==84) { bytes[84]=0x7f; bytes[85]=0xc0; bytes[86]=bytes[87]=0; }
@@ -546,7 +547,8 @@ void malformedPayload() {
     error(ProtocolErrorCode::Fields,[&] { decoder.feed(bytes); });
     }
   for(auto [offset,value]: std::vector<std::pair<size_t,uint8_t>>{
-        {44,1},{46,8},{48,0x04},{48,0x80},{50,0x04},{50,0x80}}) {
+        {44,uint8_t(1)},{46,uint8_t(8)},{48,uint8_t(0x04)},{48,uint8_t(0x80)},
+        {50,uint8_t(0x04)},{50,uint8_t(0x80)}}) {
     auto bytes = goldenInput();
     bytes[offset] = value;
     Decoder decoder;
