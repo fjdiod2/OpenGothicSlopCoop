@@ -1,9 +1,7 @@
 #include "network/session.h"
 #include "network/fingerprint.h"
 
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "network/socket.h"
 #include <chrono>
 #include <fstream>
 #include <functional>
@@ -37,9 +35,9 @@ void pump(Session& host, Session& guest, const std::function<bool()>& done, uint
   }
 
 struct Socket {
-  int fd;
-  Socket():fd(::socket(AF_INET,SOCK_STREAM,0)) { REQUIRE(fd>=0); }
-  ~Socket() { ::close(fd); }
+  Net::Handle fd;
+  Socket():fd(::socket(AF_INET,SOCK_STREAM,0)) { REQUIRE(fd!=Net::Invalid); }
+  ~Socket() { Net::close(fd); }
   Socket(const Socket&) = delete;
   Socket& operator=(const Socket&) = delete;
   void connect(uint16_t port) {
@@ -55,7 +53,7 @@ struct Socket {
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     REQUIRE(::bind(fd,reinterpret_cast<sockaddr*>(&addr),sizeof(addr))==0);
     REQUIRE(::listen(fd,1)==0);
-    socklen_t size = sizeof(addr);
+    Net::Length size = sizeof(addr);
     REQUIRE(getsockname(fd,reinterpret_cast<sockaddr*>(&addr),&size)==0);
     return ntohs(addr.sin_port);
     }
@@ -110,7 +108,7 @@ void rejections() {
   bad.connect(host.status().port);
   auto bytes = encode({0,0,0,0,identity()});
   bytes[9] = 1; // N03 version 1 cannot participate in the new handshake.
-  REQUIRE(::send(bad.fd,bytes.data(),bytes.size(),0)==ssize_t(bytes.size()));
+  REQUIRE(Net::send(bad.fd,bytes)==std::ptrdiff_t(bytes.size()));
   pump(host,guest,[&] { return host.status().reason=="protocol_mismatch"; });
   }
   REQUIRE(host.status().rejected==3);
@@ -119,7 +117,7 @@ void rejections() {
     wrongPhase.connect(host.status().port);
     const auto count = host.status().rejected;
     const auto bytes = encode(message);
-    REQUIRE(::send(wrongPhase.fd,bytes.data(),bytes.size(),0)==ssize_t(bytes.size()));
+    REQUIRE(Net::send(wrongPhase.fd,bytes)==std::ptrdiff_t(bytes.size()));
     pump(host,guest,[&] { return host.status().rejected>count; });
     REQUIRE(host.status().reason=="invalid_handshake");
     REQUIRE(host.status().state=="listening");
@@ -134,13 +132,13 @@ void rejections() {
     client.start({Role::Guest,port},identity(),0);
     client.tick(1);
     Socket accepted;
-    ::close(accepted.fd);
+    Net::close(accepted.fd);
     accepted.fd = ::accept(dishonest.fd,nullptr,nullptr);
-    REQUIRE(accepted.fd>=0);
+    REQUIRE(accepted.fd!=Net::Invalid);
     auto bad = identity();
     if(engine) bad.engine[1] ^= 1; else bad.gameData[1] ^= 1;
     auto reply = encode({1,0,0,0,Accepted{bad}});
-    REQUIRE(::send(accepted.fd,reply.data(),reply.size(),0)==ssize_t(reply.size()));
+    REQUIRE(Net::send(accepted.fd,reply)==std::ptrdiff_t(reply.size()));
     pump(host,client,[&] { return client.status().state=="rejected"; },2);
     REQUIRE(client.status().reason==(engine ? "engine_mismatch" : "data_mismatch"));
     }
@@ -192,7 +190,12 @@ void binding() {
 
 void sendMessage(Socket& socket, const Message& message) {
   const auto bytes = encode(message);
-  REQUIRE(::send(socket.fd,bytes.data(),bytes.size(),0)==ssize_t(bytes.size()));
+  size_t offset=0;
+  while(offset<bytes.size()) {
+    const auto count=Net::send(socket.fd,std::span(bytes).subspan(offset));
+    REQUIRE(count>0);
+    offset+=size_t(count);
+    }
   }
 
 void bindingAuthority() {
@@ -234,9 +237,9 @@ void bindingAuthority() {
     guest.start({Role::Guest,server.listen()},identity(),0);
     guest.tick(1);
     Socket accepted;
-    ::close(accepted.fd);
+    Net::close(accepted.fd);
     accepted.fd = ::accept(server.fd,nullptr,nullptr);
-    REQUIRE(accepted.fd>=0);
+    REQUIRE(accepted.fd!=Net::Invalid);
     if(fault!=4) sendMessage(accepted,{12,0,0,0,Accepted{identity()}});
     if(fault==5) sendMessage(accepted,{12,2,0,1,Welcome{}});
     const uint64_t player = fault==0 ? 1 : fault==1 ? 3 : 2;
@@ -333,9 +336,9 @@ void snapshotFailures() {
     guest.start({Role::Guest,server.listen()},identity(),0);
     guest.tick(1);
     Socket peer;
-    ::close(peer.fd);
+    Net::close(peer.fd);
     peer.fd = ::accept(server.fd,nullptr,nullptr);
-    REQUIRE(peer.fd>=0);
+    REQUIRE(peer.fd!=Net::Invalid);
     sendMessage(peer,{12,0,0,0,Accepted{identity()}});
     sendMessage(peer,{12,2,0,1,Welcome{}});
     const Message begin{12,2,0,1,SnapshotBegin{data.size(),hashBytes(data)}};
@@ -551,9 +554,9 @@ void inputValidation() {
   guest.start({Role::Guest,server.listen()},identity(),0);
   guest.tick(1);
   Socket accepted;
-  ::close(accepted.fd);
+  Net::close(accepted.fd);
   accepted.fd = ::accept(server.fd,nullptr,nullptr);
-  REQUIRE(accepted.fd>=0);
+  REQUIRE(accepted.fd!=Net::Invalid);
   sendMessage(accepted,{12,0,0,0,Accepted{identity()}});
   sendMessage(accepted,{12,2,0,1,Welcome{}});
   sendMessage(accepted,{12,2,0,1,SnapshotBegin{1,hashBytes(Bytes{7})}});
@@ -665,9 +668,9 @@ void rejoinStale() {
       guest.start({Role::Guest,port},identity(),0);
       guest.tick(1);
       Socket peer;
-      ::close(peer.fd);
+      Net::close(peer.fd);
       peer.fd = ::accept(server.fd,nullptr,nullptr);
-      REQUIRE(peer.fd>=0);
+      REQUIRE(peer.fd!=Net::Invalid);
       sendMessage(peer,{generation,0,0,0,Accepted{identity()}});
       sendMessage(peer,{generation,2,0,1,Welcome{}});
       sendMessage(peer,{generation,2,0,1,SnapshotBegin{1,hashBytes(Bytes{7})}});
@@ -698,9 +701,9 @@ void posesValidation() {
     guest.start({Role::Guest,server.listen()},identity(),0);
     guest.tick(1);
     Socket peer;
-    ::close(peer.fd);
+    Net::close(peer.fd);
     peer.fd = ::accept(server.fd,nullptr,nullptr);
-    REQUIRE(peer.fd>=0);
+    REQUIRE(peer.fd!=Net::Invalid);
     sendMessage(peer,{12,0,0,0,Accepted{identity()}});
     sendMessage(peer,{12,2,0,1,Welcome{}});
     sendMessage(peer,{12,2,0,1,SnapshotBegin{1,hashBytes(Bytes{7})}});
@@ -748,6 +751,7 @@ void posesValidation() {
 
 int main(int argc, char** argv) {
   try {
+    Net::initialize();
     REQUIRE(argc==2);
     const std::string name = argv[1];
     if(name=="endpoints") endpoints();

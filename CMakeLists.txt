@@ -93,7 +93,7 @@ if(WIN32)
 endif()
 
 if(WIN32)
-  target_link_libraries(${PROJECT_NAME} shlwapi DbgHelp)
+  target_link_libraries(${PROJECT_NAME} shlwapi DbgHelp ws2_32)
 elseif(UNIX)
   target_link_libraries(${PROJECT_NAME} -lpthread -ldl)
 endif()

@@ -8,17 +8,13 @@
 #include <random>
 #include <system_error>
 
-#ifndef _WIN32
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/tcp.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
+#include "socket.h"
 
 namespace Coop {
 namespace {
+using Net::Socket;
+using Net::nonblocking;
+using Net::wouldBlock;
 uint16_t portNumber(const std::string& text, bool allowZero) {
   unsigned value = 0;
   const auto result = std::from_chars(text.data(),text.data()+text.size(),value);
@@ -27,7 +23,6 @@ uint16_t portNumber(const std::string& text, bool allowZero) {
   return uint16_t(value);
   }
 
-#ifndef _WIN32
 const char* rejection(RejectReason reason) {
   switch(reason) {
     case RejectReason::Version:  return "protocol_mismatch";
@@ -39,28 +34,6 @@ const char* rejection(RejectReason reason) {
   return "invalid_handshake";
   }
 
-struct Socket {
-  int fd = -1;
-  explicit Socket(int fd=-1):fd(fd) {}
-  ~Socket() { if(fd>=0) ::close(fd); }
-  Socket(const Socket&) = delete;
-  Socket& operator=(const Socket&) = delete;
-  };
-
-bool wouldBlock() { return errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR; }
-
-void nonblocking(int fd) {
-  if(fcntl(fd,F_SETFL,O_NONBLOCK)<0 || fcntl(fd,F_SETFD,FD_CLOEXEC)<0)
-    throw std::system_error(errno,std::generic_category(),"Configure co-op socket");
-  const int yes = 1;
-  if(setsockopt(fd,IPPROTO_TCP,TCP_NODELAY,&yes,sizeof(yes))<0)
-    throw std::system_error(errno,std::generic_category(),"Configure TCP_NODELAY");
-#ifdef SO_NOSIGPIPE
-  if(setsockopt(fd,SOL_SOCKET,SO_NOSIGPIPE,&yes,sizeof(yes))<0)
-    throw std::system_error(errno,std::generic_category(),"Configure SO_NOSIGPIPE");
-#endif
-  }
-
 sockaddr_in address(uint16_t port) {
   sockaddr_in value = {};
   value.sin_family = AF_INET;
@@ -68,7 +41,6 @@ sockaddr_in address(uint16_t port) {
   value.sin_port = htons(port);
   return value;
   }
-#endif
 }
 
 Endpoint hostEndpoint(const std::string& text) { return {Role::Host,portNumber(text,true)}; }
@@ -84,7 +56,6 @@ struct Session::Impl {
   Hello identity;
   uint64_t nextGeneration = 0;
   uint64_t now = 0;
-#ifndef _WIN32
   struct Peer {
     enum Stage { Connecting, Handshake, AcceptedSending, Connected, Closing } stage = Handshake;
     Socket socket;
@@ -101,7 +72,7 @@ struct Session::Impl {
     std::deque<Message> inputs;
     std::deque<Message> poses;
     uint64_t poseInput = 0;
-    explicit Peer(int fd, uint64_t now):socket(fd),started(now) {}
+    explicit Peer(Net::Handle fd, uint64_t now):socket(fd),started(now) {}
     };
   std::unique_ptr<Socket> listener;
   std::vector<std::unique_ptr<Peer>> peers;
@@ -138,8 +109,8 @@ struct Session::Impl {
 
   void acceptPeers(uint64_t now) {
     for(size_t i=0; i<MaxPeers; ++i) {
-      const int fd = ::accept(listener->fd,nullptr,nullptr);
-      if(fd<0) {
+      const auto fd = ::accept(listener->fd,nullptr,nullptr);
+      if(fd==Net::Invalid) {
         if(!wouldBlock()) event("accept_error");
         break;
         }
@@ -338,27 +309,16 @@ struct Session::Impl {
       return false;
       }
     if(peer.stage==Peer::Connecting) {
-      pollfd pfd = {peer.socket.fd,POLLOUT,0};
-      const int result = ::poll(&pfd,1,0);
-      if(result<0) {
-        if(errno==EINTR) return true;
-        event("connect_error");
-        return false;
-        }
+      const int result = Net::connected(peer.socket.fd);
       if(result==0) return true;
-      int error = 0;
-      socklen_t length = sizeof(error);
-      if(getsockopt(peer.socket.fd,SOL_SOCKET,SO_ERROR,&error,&length)<0 || error!=0) {
-        event("connect_error");
-        return false;
-        }
+      if(result<0) { event("connect_error"); return false; }
       peer.stage = Peer::Handshake;
       state.state = "handshaking";
       }
     // Bound work per frame even if a local peer continuously writes.
     std::array<uint8_t,16384> buffer;
     for(size_t calls=0; calls<4 && peer.stage!=Peer::Closing; ++calls) {
-      const auto count = ::recv(peer.socket.fd,buffer.data(),buffer.size(),0);
+      const auto count = Net::receive(peer.socket.fd,buffer);
       if(count<0) {
         if(wouldBlock()) break;
         event("read_error");
@@ -406,12 +366,7 @@ struct Session::Impl {
       }
     for(size_t calls=0; calls<4 && !peer.output.front().empty(); ++calls) {
       auto bytes = peer.output.front();
-#ifdef MSG_NOSIGNAL
-      constexpr int flags = MSG_NOSIGNAL;
-#else
-      constexpr int flags = 0;
-#endif
-      const auto count = ::send(peer.socket.fd,bytes.data(),std::min(bytes.size(),size_t(16384)),flags);
+      const auto count = Net::send(peer.socket.fd,bytes);
       if(count<0 && wouldBlock()) break;
       if(count<=0) { event("write_error"); return false; }
       peer.output.consume(size_t(count));
@@ -426,7 +381,6 @@ struct Session::Impl {
       }
     return true;
     }
-#endif
   };
 
 Session::Session():impl(std::make_unique<Impl>()) {}
@@ -434,7 +388,6 @@ Session::~Session() = default;
 const NetworkStatus& Session::status() const { return impl->state; }
 
 bool Session::bindCompanion(uint64_t generation) {
-#ifndef _WIN32
   auto& self = *impl;
   if(self.state.role!=Role::Host || generation==0) return false;
   for(auto& peer:self.peers) {
@@ -449,14 +402,10 @@ bool Session::bindCompanion(uint64_t generation) {
     self.event("bound");
     return true;
     }
-#else
-  (void)generation;
-#endif
   return false;
   }
 
 bool Session::sendSnapshot(uint64_t generation, uint64_t revision, Bytes data) {
-#ifndef _WIN32
   auto& self = *impl;
   if(self.state.role!=Role::Host || data.empty() || data.size()>MaxSnapshotBytes || revision==0) return false;
   for(auto& peer:self.peers) {
@@ -476,26 +425,20 @@ bool Session::sendSnapshot(uint64_t generation, uint64_t revision, Bytes data) {
     self.event("snapshot_sending");
     return true;
     }
-#else
-  (void)generation; (void)revision; (void)data;
-#endif
   return false;
   }
 
 std::optional<Snapshot> Session::takeSnapshot() {
-#ifndef _WIN32
   for(auto& peer:impl->peers) {
     if(peer->transfer!=Impl::Peer::Available) continue;
     peer->transfer = Impl::Peer::Loading;
     impl->state.snapshotState = "loading";
     return Snapshot{peer->generation,peer->revision,std::move(peer->snapshot)};
     }
-#endif
   return {};
   }
 
 bool Session::snapshotLoaded(uint64_t generation, uint64_t revision) {
-#ifndef _WIN32
   if(impl->state.role!=Role::Guest) return false;
   for(auto& peer:impl->peers) {
     if(peer->transfer!=Impl::Peer::Loading || peer->generation!=generation || peer->revision!=revision) continue;
@@ -505,14 +448,10 @@ bool Session::snapshotLoaded(uint64_t generation, uint64_t revision) {
     impl->event("snapshot_loaded");
     return true;
     }
-#else
-  (void)generation; (void)revision;
-#endif
   return false;
   }
 
 bool Session::sendInput(Input input) {
-#ifndef _WIN32
   auto& self = *impl;
   if(self.state.role!=Role::Guest || self.state.inputSent==std::numeric_limits<uint64_t>::max()) return false;
   for(auto& peer:self.peers) {
@@ -522,9 +461,6 @@ bool Session::sendInput(Input input) {
     self.state.inputSent = sequence;
     return true;
     }
-#else
-  (void)input;
-#endif
   return false;
   }
 
@@ -533,7 +469,6 @@ void Session::holdInput(bool hold) {
   }
 
 std::optional<Message> Session::takeInput() {
-#ifndef _WIN32
   if(impl->state.role!=Role::Host || impl->state.inputHeld) return {};
   for(auto& peer:impl->peers) {
     if(peer->inputs.empty()) continue;
@@ -541,12 +476,10 @@ std::optional<Message> Session::takeInput() {
     peer->inputs.pop_front();
     return message;
     }
-#endif
   return {};
   }
 
 bool Session::inputApplied(uint64_t generation, uint64_t sequence, uint64_t revision) {
-#ifndef _WIN32
   if(impl->state.role!=Role::Host || impl->state.inputHeld) return false;
   for(auto& peer:impl->peers) {
     if(peer->generation!=generation || peer->transfer!=Impl::Peer::Ready ||
@@ -555,14 +488,10 @@ bool Session::inputApplied(uint64_t generation, uint64_t sequence, uint64_t revi
     peer->appliedInput = impl->state.inputApplied = sequence;
     return true;
     }
-#else
-  (void)generation; (void)sequence; (void)revision;
-#endif
   return false;
   }
 
 bool Session::sendPoses(uint64_t generation, uint64_t revision, const Poses& poses) {
-#ifndef _WIN32
   auto& self = *impl;
   if(self.state.role!=Role::Host || revision!=std::max(self.state.snapshotRevision,self.state.posesSent)+1 ||
      poses.appliedInput!=self.state.inputApplied || poses.tick<self.state.poseTick) return false;
@@ -573,14 +502,10 @@ bool Session::sendPoses(uint64_t generation, uint64_t revision, const Poses& pos
     self.state.poseTick = poses.tick;
     return true;
     }
-#else
-  (void)generation; (void)revision; (void)poses;
-#endif
   return false;
   }
 
 std::optional<Message> Session::takePoses() {
-#ifndef _WIN32
   if(impl->state.role!=Role::Guest) return {};
   for(auto& peer:impl->peers) {
     if(peer->poses.empty()) continue;
@@ -588,12 +513,10 @@ std::optional<Message> Session::takePoses() {
     peer->poses.pop_front();
     return message;
     }
-#endif
   return {};
   }
 
 bool Session::posesApplied(uint64_t generation, uint64_t revision) {
-#ifndef _WIN32
   auto& self = *impl;
   if(self.state.role!=Role::Guest || revision<=self.state.posesApplied || revision>self.state.posesReceived) return false;
   for(auto& peer:self.peers) {
@@ -602,14 +525,10 @@ bool Session::posesApplied(uint64_t generation, uint64_t revision) {
     self.state.posesApplied = revision;
     return true;
     }
-#else
-  (void)generation; (void)revision;
-#endif
   return false;
   }
 
 void Session::invalidate(const std::string& reason) {
-#ifndef _WIN32
   auto& self = *impl;
   if(self.state.role==Role::Disabled) return;
   for(const auto& peer:self.peers)
@@ -621,9 +540,6 @@ void Session::invalidate(const std::string& reason) {
   self.state.generation = self.state.boundPlayer = self.state.bindingRevision = 0;
   self.state.state = self.listener ? "listening" : "disconnected";
   self.event(reason);
-#else
-  (void)reason;
-#endif
   }
 
 void Session::start(Endpoint endpoint, const Hello& identity, uint64_t now) {
@@ -633,26 +549,22 @@ void Session::start(Endpoint endpoint, const Hello& identity, uint64_t now) {
   self.state.port = endpoint.port;
   self.identity = identity;
   if(endpoint.role==Role::Disabled) return;
-#ifdef _WIN32
-  (void)now;
-  self.state.state = "failed";
-  self.state.reason = "unsupported_platform";
-#else
   try {
+    Net::initialize();
     std::random_device random;
     self.nextGeneration = (uint64_t(random())<<32) | uint64_t(random());
     const auto addr = address(endpoint.port);
-    const int fd = ::socket(AF_INET,SOCK_STREAM,0);
-    if(fd<0) throw std::system_error(errno,std::generic_category(),"Create co-op socket");
+    const auto fd = ::socket(AF_INET,SOCK_STREAM,0);
+    if(fd==Net::Invalid) throw Net::failure("Create co-op socket");
     auto socket = std::make_unique<Socket>(fd);
     nonblocking(fd);
     if(endpoint.role==Role::Host) {
       if(::bind(fd,reinterpret_cast<const sockaddr*>(&addr),sizeof(addr))<0 || ::listen(fd,int(MaxPeers))<0)
-        throw std::system_error(errno,std::generic_category(),"Listen on co-op loopback socket");
+        throw Net::failure("Listen on co-op loopback socket");
       sockaddr_in bound = {};
-      socklen_t length = sizeof(bound);
+      Net::Length length = sizeof(bound);
       if(getsockname(fd,reinterpret_cast<sockaddr*>(&bound),&length)<0)
-        throw std::system_error(errno,std::generic_category(),"Read co-op port");
+        throw Net::failure("Read co-op port");
       self.listener = std::move(socket);
       self.state.port = ntohs(bound.sin_port);
       self.state.state = "listening";
@@ -660,10 +572,10 @@ void Session::start(Endpoint endpoint, const Hello& identity, uint64_t now) {
       }
     else {
       const int result = ::connect(fd,reinterpret_cast<const sockaddr*>(&addr),sizeof(addr));
-      if(result<0 && errno!=EINPROGRESS)
-        throw std::system_error(errno,std::generic_category(),"Connect to co-op host");
+      if(result<0 && !Net::connecting())
+        throw Net::failure("Connect to co-op host");
       auto peer = std::make_unique<Impl::Peer>(fd,now);
-      socket->fd = -1;
+      socket->fd = Net::Invalid;
       peer->stage = Impl::Peer::Connecting;
       if(!peer->output.enqueue({0,0,0,0,identity})) throw std::runtime_error("Cannot queue Hello");
       self.peers.push_back(std::move(peer));
@@ -677,11 +589,9 @@ void Session::start(Endpoint endpoint, const Hello& identity, uint64_t now) {
     self.state.state = "failed";
     self.event(std::string("startup_error: ")+error.what());
     }
-#endif
   }
 
 void Session::tick(uint64_t now) {
-#ifndef _WIN32
   auto& self = *impl;
   self.now = now;
   try {
@@ -716,9 +626,6 @@ void Session::tick(uint64_t now) {
     self.state.generation = self.state.boundPlayer = self.state.bindingRevision = 0;
     self.event(std::string("network_error: ")+error.what());
     }
-#else
-  (void)now;
-#endif
   }
 
 }

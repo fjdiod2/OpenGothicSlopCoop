@@ -1442,3 +1442,16 @@ on Windows). CMake uses `OpenSSL::Crypto`. The portable SHA implementation uses
 [OpenSSL EVP](https://docs.openssl.org/3.5/man3/EVP_DigestInit/).
 The asset-free portability workflow runs SHA vectors, manifest fixtures and codec
 checks without Gothic assets. A configured workflow is not a Windows test result.
+
+## R03 platform socket boundary
+
+`common/network/socket.h` owns the Winsock/POSIX differences: pointer-sized
+`SOCKET` handles, `WSAStartup(2.2)`/`WSACleanup`, `closesocket`, `ioctlsocket`,
+`WSAPoll`, WSA errors, and bounded int-sized buffers. POSIX retains close-on-exec,
+nonblocking descriptors and SIGPIPE suppression. Both platforms run the same
+session state machine, codec, partial-write queues, input authority and snapshot
+integrity checks. Windows links `ws2_32`. Runtime initialization is once per process;
+all session sockets are RAII-owned and close on restart, exception or destruction.
+The asset-free connection tests are enabled on all three CI operating systems,
+including real handshake, snapshot, timeout, disconnect and reconnect cases.
+[Winsock startup contract](https://learn.microsoft.com/en-us/windows/win32/winsock/initializing-winsock).
